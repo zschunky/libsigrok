@@ -179,8 +179,8 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 
     // initialize command packet
     device_context->command_packet.magic=H4032L_PROTOCOL_COMMAND_PACKET_MAGIC;
-    device_context->command_packet.pwm_a=h4032l_protocol_voltage2pwm(1.5);
-    device_context->command_packet.pwm_b=h4032l_protocol_voltage2pwm(1.5);
+    device_context->command_packet.pwm_a=h4032l_protocol_voltage2pwm(2.5);
+    device_context->command_packet.pwm_b=h4032l_protocol_voltage2pwm(2.5);
     device_context->command_packet.sample_size=16384;
     device_context->command_packet.pre_trigger_size=1024;
 
