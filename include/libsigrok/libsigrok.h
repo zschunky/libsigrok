@@ -162,8 +162,6 @@ enum sr_packettype {
 	SR_DF_TRIGGER,
 	/** Payload is struct sr_datafeed_logic. */
 	SR_DF_LOGIC,
-	/** DEPRECATED! Use SR_DF_ANALOG instead. */
-	SR_DF_ANALOG_OLD,
 	/** Beginning of frame. No payload. */
 	SR_DF_FRAME_BEGIN,
 	/** End of frame. No payload. */
@@ -233,6 +231,8 @@ enum sr_mq {
 	SR_MQ_APPARENT_POWER,
 	/** Mass */
 	SR_MQ_MASS,
+	/** Harmonic ratio */
+	SR_MQ_HARMONIC_RATIO,
 
 	/* Update sr_key_info_mq[] (hwdriver.c) upon changes! */
 };
@@ -265,7 +265,7 @@ enum sr_unit {
 	SR_UNIT_SIEMENS,
 	/**
 	 * An absolute measurement of power, in decibels, referenced to
-	 * 1 milliwatt (dBu).
+	 * 1 milliwatt (dBm).
 	 */
 	SR_UNIT_DECIBEL_MW,
 	/** Voltage in decibel, referenced to 1 volt (dBV). */
@@ -383,6 +383,8 @@ enum sr_mqflag {
 	SR_MQFLAG_REFERENCE = 0x80000,
 	/** Unstable value (hasn't settled yet). */
 	SR_MQFLAG_UNSTABLE = 0x100000,
+	/** Measurement is four wire (e.g. Kelvin connection). */
+	SR_MQFLAG_FOUR_WIRE = 0x200000,
 
 	/*
 	 * Update mq_strings[] (analog.c) and fancyprint() (output/analog.c)
@@ -494,24 +496,6 @@ struct sr_datafeed_logic {
 	void *data;
 };
 
-/** Analog datafeed payload for type SR_DF_ANALOG_OLD. */
-struct sr_datafeed_analog_old {
-	/** The channels for which data is included in this packet. */
-	GSList *channels;
-	/** Number of samples in data */
-	int num_samples;
-	/** Measured quantity (voltage, current, temperature, and so on).
-	 *  Use SR_MQ_VOLTAGE, ... */
-	int mq;
-	/** Unit in which the MQ is measured. Use SR_UNIT_VOLT, ... */
-	int unit;
-	/** Bitmap with extra information about the MQ. Use SR_MQFLAG_AC, ... */
-	uint64_t mqflags;
-	/** The analog value(s). The data is interleaved according to
-	 * the channels list. */
-	float *data;
-};
-
 /** Analog datafeed payload for type SR_DF_ANALOG. */
 struct sr_datafeed_analog {
 	void *data;
@@ -526,7 +510,12 @@ struct sr_analog_encoding {
 	gboolean is_signed;
 	gboolean is_float;
 	gboolean is_bigendian;
-	uint8_t digits;
+	/**
+	 * Number of significant digits after the decimal point if positive,
+	 * or number of non-significant digits before the decimal point if
+	 * negative (refers to the value we actually read on the wire).
+	 */
+	int8_t digits;
 	gboolean is_digits_decimal;
 	struct sr_rational scale;
 	struct sr_rational offset;
@@ -540,7 +529,13 @@ struct sr_analog_meaning {
 };
 
 struct sr_analog_spec {
-	uint8_t spec_digits;
+	/**
+	 * Number of significant digits after the decimal point if positive,
+	 * or number of non-significant digits before the decimal point if
+	 * negative (refers to vendor specifications/datasheet or actual
+	 * device display).
+	 */
+	int8_t spec_digits;
 };
 
 /** Generic option struct used by various subsystems. */
@@ -705,6 +700,9 @@ enum sr_configkey {
 	/** The device can act as a scale. */
 	SR_CONF_SCALE,
 
+	/** The device can act as a function generator. */
+	SR_CONF_SIGNAL_GENERATOR,
+
 	/* Update sr_key_info_config[] (hwdriver.c) upon changes! */
 
 	/*--- Driver scan options -------------------------------------------*/
@@ -799,7 +797,7 @@ enum sr_configkey {
 	/** Coupling. */
 	SR_CONF_COUPLING,
 
-	/** Trigger matches.  */
+	/** Trigger matches. */
 	SR_CONF_TRIGGER_MATCH,
 
 	/** The device supports setting its sample interval, in ms. */
@@ -808,16 +806,16 @@ enum sr_configkey {
 	/** Number of horizontal divisions, as related to SR_CONF_TIMEBASE. */
 	SR_CONF_NUM_HDIV,
 
-	/** Number of vertical divisions, as related to SR_CONF_VDIV.  */
+	/** Number of vertical divisions, as related to SR_CONF_VDIV. */
 	SR_CONF_NUM_VDIV,
 
-	/** Sound pressure level frequency weighting.  */
+	/** Sound pressure level frequency weighting. */
 	SR_CONF_SPL_WEIGHT_FREQ,
 
-	/** Sound pressure level time weighting.  */
+	/** Sound pressure level time weighting. */
 	SR_CONF_SPL_WEIGHT_TIME,
 
-	/** Sound pressure level measurement range.  */
+	/** Sound pressure level measurement range. */
 	SR_CONF_SPL_MEASUREMENT_RANGE,
 
 	/** Max hold mode. */
@@ -982,6 +980,9 @@ enum sr_configkey {
 	/** Under-voltage condition active. */
 	SR_CONF_UNDER_VOLTAGE_CONDITION_ACTIVE,
 
+	/** Trigger level. */
+	SR_CONF_TRIGGER_LEVEL,
+
 	/* Update sr_key_info_config[] (hwdriver.c) upon changes! */
 
 	/*--- Special stuff -------------------------------------------------*/
@@ -1014,6 +1015,9 @@ enum sr_configkey {
 
 	/** The device supports setting a probe factor. */
 	SR_CONF_PROBE_FACTOR,
+
+	/** Number of powerline cycles for ADC integration time. */
+	SR_CONF_ADC_POWERLINE_CYCLES,
 
 	/* Update sr_key_info_config[] (hwdriver.c) upon changes! */
 
@@ -1151,11 +1155,9 @@ struct sr_dev_driver {
 	/** Close device */
 	int (*dev_close) (struct sr_dev_inst *sdi);
 	/** Begin data acquisition on the specified device. */
-	int (*dev_acquisition_start) (const struct sr_dev_inst *sdi,
-			void *cb_data);
+	int (*dev_acquisition_start) (const struct sr_dev_inst *sdi);
 	/** End data acquisition on the specified device. */
-	int (*dev_acquisition_stop) (struct sr_dev_inst *sdi,
-			void *cb_data);
+	int (*dev_acquisition_stop) (struct sr_dev_inst *sdi);
 
 	/* Dynamic */
 	/** Device driver context, considered private. Initialized by init(). */

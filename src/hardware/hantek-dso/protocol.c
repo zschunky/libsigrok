@@ -25,11 +25,9 @@
 #include <libusb.h>
 #include <libsigrok/libsigrok.h>
 #include "libsigrok-internal.h"
-#include "dso.h"
+#include "protocol.h"
 
 #define NUM_CHANNELS 2
-
-extern struct sr_dev_driver hantek_dso_driver_info;
 
 static int send_begin(const struct sr_dev_inst *sdi)
 {
@@ -111,7 +109,7 @@ err:
 SR_PRIV int dso_open(struct sr_dev_inst *sdi)
 {
 	struct dev_context *devc;
-	struct drv_context *drvc = hantek_dso_driver_info.context;
+	struct drv_context *drvc = sdi->driver->context;
 	struct sr_usb_dev_inst *usb;
 	struct libusb_device_descriptor des;
 	libusb_device **devlist;
@@ -317,8 +315,8 @@ static int dso_set_trigger_samplerate(const struct sr_dev_inst *sdi)
 	cmdstring[2] |= (tmp & 0x07) << 5;
 
 	/* Enabled channels: 00=CH1 01=CH2 10=both */
-	sr_dbg("Channels CH1=%d CH2=%d", devc->ch1_enabled, devc->ch2_enabled);
-	tmp = (((devc->ch2_enabled ? 1 : 0) << 1) + (devc->ch1_enabled ? 1 : 0)) - 1;
+	sr_dbg("Channels CH1=%d CH2=%d", devc->ch_enabled[0], devc->ch_enabled[1]);
+	tmp = (((devc->ch_enabled[1] ? 1 : 0) << 1) + (devc->ch_enabled[0] ? 1 : 0)) - 1;
 	cmdstring[3] = tmp;
 
 	/* Fast rates channel */

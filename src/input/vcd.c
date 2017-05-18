@@ -93,7 +93,7 @@ struct vcd_channel {
 
 /*
  * Reads a single VCD section from input file and parses it to name/contents.
- * e.g. $timescale 1ps $end  => "timescale" "1ps"
+ * e.g. $timescale 1ps $end => "timescale" "1ps"
  */
 static gboolean parse_section(GString *buf, gchar **name, gchar **contents)
 {
@@ -104,6 +104,10 @@ static gboolean parse_section(GString *buf, gchar **name, gchar **contents)
 	*name = *contents = NULL;
 	status = FALSE;
 	pos = 0;
+
+	/* Skip UTF8 BOM */
+	if (buf->len >= 3 && !strncmp(buf->str, "\xef\xbb\xbf", 3))
+		pos = 3;
 
 	/* Skip any initial white-space. */
 	while (pos < buf->len && g_ascii_isspace(buf->str[pos]))
@@ -526,7 +530,7 @@ static int process_buffer(struct sr_input *in)
 
 	inc = in->priv;
 	if (!inc->started) {
-		std_session_send_df_header(in->sdi, LOG_PREFIX);
+		std_session_send_df_header(in->sdi);
 
 		packet.type = SR_DF_META;
 		packet.payload = &meta;
@@ -578,7 +582,6 @@ static int receive(struct sr_input *in, GString *buf)
 
 static int end(struct sr_input *in)
 {
-	struct sr_datafeed_packet packet;
 	struct context *inc;
 	int ret;
 
@@ -592,10 +595,8 @@ static int end(struct sr_input *in)
 	/* Send any samples that haven't been sent yet. */
 	send_buffer(in);
 
-	if (inc->started) {
-		packet.type = SR_DF_END;
-		sr_session_send(in->sdi, &packet);
-	}
+	if (inc->started)
+		std_session_send_df_end(in->sdi);
 
 	return ret;
 }
@@ -610,6 +611,17 @@ static void cleanup(struct sr_input *in)
 	inc->buffer = NULL;
 	g_free(inc->current_levels);
 	inc->current_levels = NULL;
+}
+
+static int reset(struct sr_input *in)
+{
+	struct context *inc = in->priv;
+
+	cleanup(in);
+	inc->started = FALSE;
+	g_string_truncate(in->buf, 0);
+
+	return SR_OK;
 }
 
 static struct sr_option options[] = {
@@ -644,4 +656,5 @@ SR_PRIV struct sr_input_module input_vcd = {
 	.receive = receive,
 	.end = end,
 	.cleanup = cleanup,
+	.reset = reset,
 };

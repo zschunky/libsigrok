@@ -328,8 +328,11 @@ SR_PRIV int korad_kaxxxxp_receive_data(int fd, int revents, void *cb_data)
 	struct dev_context *devc;
 	struct sr_serial_dev_inst *serial;
 	struct sr_datafeed_packet packet;
-	struct sr_datafeed_analog_old analog;
-	int64_t t, elapsed_us;
+	struct sr_datafeed_analog analog;
+	struct sr_analog_encoding encoding;
+	struct sr_analog_meaning meaning;
+	struct sr_analog_spec spec;
+	uint64_t elapsed_us;
 
 	(void)fd;
 
@@ -345,25 +348,32 @@ SR_PRIV int korad_kaxxxxp_receive_data(int fd, int revents, void *cb_data)
 		/* Get the value. */
 		korad_kaxxxxp_get_reply(serial, devc);
 
+		/* Note: digits/spec_digits will be overridden later. */
+		sr_analog_init(&analog, &encoding, &meaning, &spec, 0);
+
 		/* Send the value forward. */
-		packet.type = SR_DF_ANALOG_OLD;
+		packet.type = SR_DF_ANALOG;
 		packet.payload = &analog;
-		analog.channels = sdi->channels;
+		analog.meaning->channels = sdi->channels;
 		analog.num_samples = 1;
 		if (devc->target == KAXXXXP_CURRENT) {
-			analog.mq = SR_MQ_CURRENT;
-			analog.unit = SR_UNIT_AMPERE;
-			analog.mqflags = 0;
+			analog.meaning->mq = SR_MQ_CURRENT;
+			analog.meaning->unit = SR_UNIT_AMPERE;
+			analog.meaning->mqflags = 0;
+			analog.encoding->digits = 3;
+			analog.spec->spec_digits = 3;
 			analog.data = &devc->current;
 			sr_session_send(sdi, &packet);
 		}
 		if (devc->target == KAXXXXP_VOLTAGE) {
-			analog.mq = SR_MQ_VOLTAGE;
-			analog.unit = SR_UNIT_VOLT;
-			analog.mqflags = SR_MQFLAG_DC;
+			analog.meaning->mq = SR_MQ_VOLTAGE;
+			analog.meaning->unit = SR_UNIT_VOLT;
+			analog.meaning->mqflags = SR_MQFLAG_DC;
+			analog.encoding->digits = 2;
+			analog.spec->spec_digits = 2;
 			analog.data = &devc->voltage;
 			sr_session_send(sdi, &packet);
-			devc->num_samples++;
+			sr_sw_limits_update_samples_read(&devc->limits, 1);
 		}
 		next_measurement(devc);
 	} else {
@@ -376,19 +386,9 @@ SR_PRIV int korad_kaxxxxp_receive_data(int fd, int revents, void *cb_data)
 		}
 	}
 
-	if (devc->limit_samples && (devc->num_samples >= devc->limit_samples)) {
-		sr_info("Requested number of samples reached.");
-		sdi->driver->dev_acquisition_stop(sdi, cb_data);
+	if (sr_sw_limits_check(&devc->limits)) {
+		sdi->driver->dev_acquisition_stop(sdi);
 		return TRUE;
-	}
-
-	if (devc->limit_msec) {
-		t = (g_get_monotonic_time() - devc->starttime) / 1000;
-		if (t > (int64_t)devc->limit_msec) {
-			sr_info("Requested time limit reached.");
-			sdi->driver->dev_acquisition_stop(sdi, cb_data);
-			return TRUE;
-		}
 	}
 
 	/* Request next packet, if required. */

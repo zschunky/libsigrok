@@ -17,15 +17,26 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef LIBSIGROK_HARDWARE_AGILENT_DMM_AGILENT_DMM_H
-#define LIBSIGROK_HARDWARE_AGILENT_DMM_AGILENT_DMM_H
+#ifndef LIBSIGROK_HARDWARE_AGILENT_DMM_PROTOCOL_H
+#define LIBSIGROK_HARDWARE_AGILENT_DMM_PROTOCOL_H
 
 #define LOG_PREFIX "agilent-dmm"
 
-#define AGDMM_BUFSIZE  256
+#define MAX_CHANNELS 3
+#define AGDMM_BUFSIZE 256
 
 /* Always USB-serial, 1ms is plenty. */
 #define SERIAL_WRITE_TIMEOUT_MS 1
+
+#define DEFAULT_DATA_SOURCE	DATA_SOURCE_LIVE
+
+enum {
+	DATA_SOURCE_LIVE,
+	DATA_SOURCE_LOG_HAND,
+	DATA_SOURCE_LOG_TRIG,
+	DATA_SOURCE_LOG_AUTO,
+	DATA_SOURCE_LOG_EXPO,
+};
 
 /* Supported models */
 enum {
@@ -36,43 +47,68 @@ enum {
 	AGILENT_U1241,
 	AGILENT_U1242,
 
+	KEYSIGHT_U1241C,
+	KEYSIGHT_U1242C,
+
 	AGILENT_U1251,
 	AGILENT_U1252,
 	AGILENT_U1253,
+
+	KEYSIGHT_U1281,
+	KEYSIGHT_U1282,
 };
 
 /* Supported device profiles */
 struct agdmm_profile {
 	int model;
 	const char *modelname;
-	const struct agdmm_job *jobs;
+	int nb_channels;
+	const struct agdmm_job *jobs_live;
+	const struct agdmm_job *jobs_log;
 	const struct agdmm_recv *recvs;
 };
 
 /* Private, per-device-instance driver context. */
 struct dev_context {
 	const struct agdmm_profile *profile;
-	uint64_t limit_samples;
-	uint64_t limit_msec;
-
-	/* Opaque pointer passed in by the frontend. */
-	void *cb_data;
+	struct sr_sw_limits limits;
+	int data_source;
 
 	/* Runtime. */
-	uint64_t num_samples;
-	int64_t jobqueue[8];
+	const struct agdmm_job *jobs;
+	int current_job;
+	gboolean job_running;
+	gboolean job_again;
+	int64_t jobs_start[8];
 	unsigned char buf[AGDMM_BUFSIZE];
 	int buflen;
-	int cur_mq;
-	int cur_unit;
-	int cur_mqflags;
-	int cur_divider;
-	int cur_acdc;
+	uint64_t cur_samplerate;
+	struct sr_channel *cur_channel;
+	struct sr_channel *cur_conf;
+	int cur_sample;
+	int cur_mq[MAX_CHANNELS];
+	int cur_unit[MAX_CHANNELS];
+	int cur_mqflags[MAX_CHANNELS];
+	int cur_digits[MAX_CHANNELS];
+	int cur_encoding[MAX_CHANNELS];
+	int cur_exponent[MAX_CHANNELS];
 	int mode_tempaux;
 	int mode_continuity;
+	int mode_squarewave;
+	int mode_dbm_dbv;
+};
+
+enum job_type {
+	JOB_AGAIN = 1,
+	JOB_STOP,
+	JOB_CONF,
+	JOB_STAT,
+	JOB_FETC,
+	JOB_LOG,
 };
 
 struct agdmm_job {
+	enum job_type type;
 	int interval;
 	int (*send) (const struct sr_dev_inst *sdi);
 };

@@ -220,11 +220,19 @@ static int rigol_ds_check_stop(const struct sr_dev_inst *sdi)
 	if (devc->model->series->protocol != PROTOCOL_V3)
 		return SR_OK;
 
-	if (rigol_ds_config_set(sdi, ":WAV:SOUR CHAN%d",
-			  ch->index + 1) != SR_OK)
-		return SR_ERR;
+	if (ch->type == SR_CHANNEL_LOGIC) {
+		if (rigol_ds_config_set(sdi->conn, ":WAV:SOUR LA") != SR_OK)
+			return SR_ERR;
+	} else {
+		if (rigol_ds_config_set(sdi, ":WAV:SOUR CHAN%d",
+				ch->index + 1) != SR_OK)
+			return SR_ERR;
+	}
 	/* Check that the number of samples will be accepted */
-	if (rigol_ds_config_set(sdi, ":WAV:POIN %d", devc->analog_frame_size) != SR_OK)
+	if (rigol_ds_config_set(sdi, ":WAV:POIN %d",
+			ch->type == SR_CHANNEL_LOGIC ?
+				devc->digital_frame_size :
+				devc->analog_frame_size) != SR_OK)
 		return SR_ERR;
 	if (sr_scpi_get_int(sdi->conn, "*ESR?", &tmp) != SR_OK)
 		return SR_ERR;
@@ -431,9 +439,14 @@ SR_PRIV int rigol_ds_channel_start(const struct sr_dev_inst *sdi)
 		rigol_ds_set_wait_event(devc, WAIT_NONE);
 		break;
 	case PROTOCOL_V3:
-		if (rigol_ds_config_set(sdi, ":WAV:SOUR CHAN%d",
-				  ch->index + 1) != SR_OK)
-			return SR_ERR;
+		if (ch->type == SR_CHANNEL_LOGIC) {
+			if (rigol_ds_config_set(sdi->conn, ":WAV:SOUR LA") != SR_OK)
+				return SR_ERR;
+		} else {
+			if (rigol_ds_config_set(sdi, ":WAV:SOUR CHAN%d",
+					ch->index + 1) != SR_OK)
+				return SR_ERR;
+		}
 		if (devc->data_source != DATA_SOURCE_LIVE) {
 			if (rigol_ds_config_set(sdi, ":WAV:RES") != SR_OK)
 				return SR_ERR;
@@ -539,7 +552,10 @@ SR_PRIV int rigol_ds_receive(int fd, int revents, void *cb_data)
 	struct sr_scpi_dev_inst *scpi;
 	struct dev_context *devc;
 	struct sr_datafeed_packet packet;
-	struct sr_datafeed_analog_old analog;
+	struct sr_datafeed_analog analog;
+	struct sr_analog_encoding encoding;
+	struct sr_analog_meaning meaning;
+	struct sr_analog_spec spec;
 	struct sr_datafeed_logic logic;
 	double vdiv, offset;
 	int len, i, vref;
@@ -592,10 +608,10 @@ SR_PRIV int rigol_ds_receive(int fd, int revents, void *cb_data)
 
 	if (devc->num_block_bytes == 0) {
 		if (devc->model->series->protocol >= PROTOCOL_V4) {
-			if (sr_scpi_send(sdi->conn, ":WAV:START %d",
+			if (rigol_ds_config_set(sdi, ":WAV:START %d",
 					devc->num_channel_bytes + 1) != SR_OK)
 				return TRUE;
-			if (sr_scpi_send(sdi->conn, ":WAV:STOP %d",
+			if (rigol_ds_config_set(sdi, ":WAV:STOP %d",
 					MIN(devc->num_channel_bytes + ACQ_BLOCK_SIZE,
 						devc->analog_frame_size)) != SR_OK)
 				return TRUE;
@@ -617,8 +633,8 @@ SR_PRIV int rigol_ds_receive(int fd, int revents, void *cb_data)
 			if (len == -1) {
 				sr_err("Read error, aborting capture.");
 				packet.type = SR_DF_FRAME_END;
-				sr_session_send(cb_data, &packet);
-				sdi->driver->dev_acquisition_stop(sdi, cb_data);
+				sr_session_send(sdi, &packet);
+				sdi->driver->dev_acquisition_stop(sdi);
 				return TRUE;
 			}
 			/* At slow timebases in live capture the DS2072
@@ -650,8 +666,8 @@ SR_PRIV int rigol_ds_receive(int fd, int revents, void *cb_data)
 	if (len == -1) {
 		sr_err("Read error, aborting capture.");
 		packet.type = SR_DF_FRAME_END;
-		sr_session_send(cb_data, &packet);
-		sdi->driver->dev_acquisition_stop(sdi, cb_data);
+		sr_session_send(sdi, &packet);
+		sdi->driver->dev_acquisition_stop(sdi);
 		return TRUE;
 	}
 
@@ -669,16 +685,19 @@ SR_PRIV int rigol_ds_receive(int fd, int revents, void *cb_data)
 		else
 			for (i = 0; i < len; i++)
 				devc->data[i] = (128 - devc->buffer[i]) * vdiv - offset;
-		analog.channels = g_slist_append(NULL, ch);
+		float vdivlog = log10f(vdiv);
+		int digits = -(int)vdivlog + (vdivlog < 0.0);
+		sr_analog_init(&analog, &encoding, &meaning, &spec, digits);
+		analog.meaning->channels = g_slist_append(NULL, ch);
 		analog.num_samples = len;
 		analog.data = devc->data;
-		analog.mq = SR_MQ_VOLTAGE;
-		analog.unit = SR_UNIT_VOLT;
-		analog.mqflags = 0;
-		packet.type = SR_DF_ANALOG_OLD;
+		analog.meaning->mq = SR_MQ_VOLTAGE;
+		analog.meaning->unit = SR_UNIT_VOLT;
+		analog.meaning->mqflags = 0;
+		packet.type = SR_DF_ANALOG;
 		packet.payload = &analog;
-		sr_session_send(cb_data, &packet);
-		g_slist_free(analog.channels);
+		sr_session_send(sdi, &packet);
+		g_slist_free(analog.meaning->channels);
 	} else {
 		logic.length = len;
 		// TODO: For the MSO1000Z series, we need a way to express that
@@ -688,7 +707,7 @@ SR_PRIV int rigol_ds_receive(int fd, int revents, void *cb_data)
 		logic.data = devc->buffer;
 		packet.type = SR_DF_LOGIC;
 		packet.payload = &logic;
-		sr_session_send(cb_data, &packet);
+		sr_session_send(sdi, &packet);
 	}
 
 	if (devc->num_block_read == devc->num_block_bytes) {
@@ -707,8 +726,8 @@ SR_PRIV int rigol_ds_receive(int fd, int revents, void *cb_data)
 		if (!sr_scpi_read_complete(scpi)) {
 			sr_err("Read should have been completed");
 			packet.type = SR_DF_FRAME_END;
-			sr_session_send(cb_data, &packet);
-			sdi->driver->dev_acquisition_stop(sdi, cb_data);
+			sr_session_send(sdi, &packet);
+			sdi->driver->dev_acquisition_stop(sdi);
 			return TRUE;
 		}
 		devc->num_block_read = 0;
@@ -742,11 +761,11 @@ SR_PRIV int rigol_ds_receive(int fd, int revents, void *cb_data)
 	} else {
 		/* Done with this frame. */
 		packet.type = SR_DF_FRAME_END;
-		sr_session_send(cb_data, &packet);
+		sr_session_send(sdi, &packet);
 
 		if (++devc->num_frames == devc->limit_frames) {
 			/* Last frame, stop capture. */
-			sdi->driver->dev_acquisition_stop(sdi, cb_data);
+			sdi->driver->dev_acquisition_stop(sdi);
 		} else {
 			/* Get the next frame, starting with the first channel. */
 			devc->channel_entry = devc->enabled_channels;
@@ -755,7 +774,7 @@ SR_PRIV int rigol_ds_receive(int fd, int revents, void *cb_data)
 
 			/* Start of next frame. */
 			packet.type = SR_DF_FRAME_BEGIN;
-			sr_session_send(cb_data, &packet);
+			sr_session_send(sdi, &packet);
 		}
 	}
 
@@ -765,6 +784,7 @@ SR_PRIV int rigol_ds_receive(int fd, int revents, void *cb_data)
 SR_PRIV int rigol_ds_get_dev_cfg(const struct sr_dev_inst *sdi)
 {
 	struct dev_context *devc;
+	struct sr_channel *ch;
 	char *cmd;
 	unsigned int i;
 	int res;
@@ -778,6 +798,8 @@ SR_PRIV int rigol_ds_get_dev_cfg(const struct sr_dev_inst *sdi)
 		g_free(cmd);
 		if (res != SR_OK)
 			return SR_ERR;
+		ch = g_slist_nth_data(sdi->channels, i);
+		ch->enabled = devc->analog_channels[i];
 	}
 	sr_dbg("Current analog channel state:");
 	for (i = 0; i < devc->model->analog_channels; i++)
@@ -786,7 +808,7 @@ SR_PRIV int rigol_ds_get_dev_cfg(const struct sr_dev_inst *sdi)
 	/* Digital channel state. */
 	if (devc->model->has_digital) {
 		if (sr_scpi_get_bool(sdi->conn,
-				devc->model->series->protocol >= PROTOCOL_V4 ?
+				devc->model->series->protocol >= PROTOCOL_V3 ?
 					":LA:STAT?" : ":LA:DISP?",
 				&devc->la_enabled) != SR_OK)
 			return SR_ERR;
@@ -794,12 +816,14 @@ SR_PRIV int rigol_ds_get_dev_cfg(const struct sr_dev_inst *sdi)
 				devc->la_enabled ? "enabled" : "disabled");
 		for (i = 0; i < ARRAY_SIZE(devc->digital_channels); i++) {
 			cmd = g_strdup_printf(
-				devc->model->series->protocol >= PROTOCOL_V4 ?
+				devc->model->series->protocol >= PROTOCOL_V3 ?
 					":LA:DIG%d:DISP?" : ":DIG%d:TURN?", i);
 			res = sr_scpi_get_bool(sdi->conn, cmd, &devc->digital_channels[i]);
 			g_free(cmd);
 			if (res != SR_OK)
 				return SR_ERR;
+			ch = g_slist_nth_data(sdi->channels, i + devc->model->analog_channels);
+			ch->enabled = devc->digital_channels[i];
 			sr_dbg("D%d: %s", i, devc->digital_channels[i] ? "on" : "off");
 		}
 	}
@@ -809,29 +833,21 @@ SR_PRIV int rigol_ds_get_dev_cfg(const struct sr_dev_inst *sdi)
 		return SR_ERR;
 	sr_dbg("Current timebase %g", devc->timebase);
 
-	/* Vertical gain. */
+	/* Probe attenuation. */
 	for (i = 0; i < devc->model->analog_channels; i++) {
-		cmd = g_strdup_printf(":CHAN%d:SCAL?", i + 1);
-		res = sr_scpi_get_float(sdi->conn, cmd, &devc->vdiv[i]);
+		cmd = g_strdup_printf(":CHAN%d:PROB?", i + 1);
+		res = sr_scpi_get_float(sdi->conn, cmd, &devc->attenuation[i]);
 		g_free(cmd);
 		if (res != SR_OK)
 			return SR_ERR;
 	}
-	sr_dbg("Current vertical gain:");
+	sr_dbg("Current probe attenuation:");
 	for (i = 0; i < devc->model->analog_channels; i++)
-		sr_dbg("CH%d %g", i + 1, devc->vdiv[i]);
+		sr_dbg("CH%d %g", i + 1, devc->attenuation[i]);
 
-	/* Vertical offset. */
-	for (i = 0; i < devc->model->analog_channels; i++) {
-		cmd = g_strdup_printf(":CHAN%d:OFFS?", i + 1);
-		res = sr_scpi_get_float(sdi->conn, cmd, &devc->vert_offset[i]);
-		g_free(cmd);
-		if (res != SR_OK)
-			return SR_ERR;
-	}
-	sr_dbg("Current vertical offset:");
-	for (i = 0; i < devc->model->analog_channels; i++)
-		sr_dbg("CH%d %g", i + 1, devc->vert_offset[i]);
+	/* Vertical gain and offset. */
+	if (rigol_ds_get_dev_cfg_vertical(sdi) != SR_OK)
+		return SR_ERR;
 
 	/* Coupling. */
 	for (i = 0; i < devc->model->analog_channels; i++) {
@@ -859,6 +875,47 @@ SR_PRIV int rigol_ds_get_dev_cfg(const struct sr_dev_inst *sdi)
 	if (sr_scpi_get_string(sdi->conn, ":TRIG:EDGE:SLOP?", &devc->trigger_slope) != SR_OK)
 		return SR_ERR;
 	sr_dbg("Current trigger slope %s", devc->trigger_slope);
+
+	/* Trigger level. */
+	if (sr_scpi_get_float(sdi->conn, ":TRIG:EDGE:LEV?", &devc->trigger_level) != SR_OK)
+		return SR_ERR;
+	sr_dbg("Current trigger level %g", devc->trigger_level);
+
+	return SR_OK;
+}
+
+SR_PRIV int rigol_ds_get_dev_cfg_vertical(const struct sr_dev_inst *sdi)
+{
+	struct dev_context *devc;
+	char *cmd;
+	unsigned int i;
+	int res;
+
+	devc = sdi->priv;
+
+	/* Vertical gain. */
+	for (i = 0; i < devc->model->analog_channels; i++) {
+		cmd = g_strdup_printf(":CHAN%d:SCAL?", i + 1);
+		res = sr_scpi_get_float(sdi->conn, cmd, &devc->vdiv[i]);
+		g_free(cmd);
+		if (res != SR_OK)
+			return SR_ERR;
+	}
+	sr_dbg("Current vertical gain:");
+	for (i = 0; i < devc->model->analog_channels; i++)
+		sr_dbg("CH%d %g", i + 1, devc->vdiv[i]);
+
+	/* Vertical offset. */
+	for (i = 0; i < devc->model->analog_channels; i++) {
+		cmd = g_strdup_printf(":CHAN%d:OFFS?", i + 1);
+		res = sr_scpi_get_float(sdi->conn, cmd, &devc->vert_offset[i]);
+		g_free(cmd);
+		if (res != SR_OK)
+			return SR_ERR;
+	}
+	sr_dbg("Current vertical offset:");
+	for (i = 0; i < devc->model->analog_channels; i++)
+		sr_dbg("CH%d %g", i + 1, devc->vert_offset[i]);
 
 	return SR_OK;
 }

@@ -90,7 +90,7 @@ static const struct sr_scpi_dev_inst *scpi_devs[] = {
 	&scpi_libgpib_dev,
 #endif
 #ifdef HAVE_LIBSERIALPORT
-	&scpi_serial_dev,  /* must be last as it matches any resource */
+	&scpi_serial_dev, /* Must be last as it matches any resource. */
 #endif
 };
 
@@ -190,7 +190,7 @@ SR_PRIV struct sr_scpi_dev_inst *scpi_dev_inst_new(struct drv_context *drvc,
 			scpi = g_malloc(sizeof(*scpi));
 			*scpi = *scpi_dev;
 			scpi->priv = g_malloc0(scpi->priv_size);
-			scpi->read_timeout_ms = 1000;
+			scpi->read_timeout_us = 1000 * 1000;
 			params = g_strsplit(resource, "/", 0);
 			if (scpi->dev_inst_new(scpi->priv, drvc, resource,
 			                       params, serialcomm) != SR_OK) {
@@ -296,8 +296,10 @@ SR_PRIV int sr_scpi_send_variadic(struct sr_scpi_dev_inst *scpi,
 	va_end(args_copy);
 
 	/* Allocate buffer and write out command. */
-	buf = g_malloc(len + 1);
+	buf = g_malloc0(len + 2);
 	vsprintf(buf, format, args);
+	if (buf[len - 1] != '\n')
+		buf[len] = '\n';
 
 	/* Send command. */
 	ret = scpi->send(scpi->priv, buf);
@@ -336,6 +338,21 @@ SR_PRIV int sr_scpi_read_data(struct sr_scpi_dev_inst *scpi,
 }
 
 /**
+ * Send data to SCPI device.
+ *
+ * @param scpi Previously initialised SCPI device structure.
+ * @param buf Buffer with data to send.
+ * @param len Number of bytes to send.
+ *
+ * @return Number of bytes read, or SR_ERR upon failure.
+ */
+SR_PRIV int sr_scpi_write_data(struct sr_scpi_dev_inst *scpi,
+			char *buf, int maxlen)
+{
+	return scpi->write_data(scpi->priv, buf, maxlen);
+}
+
+/**
  * Check whether a complete SCPI response has been received.
  *
  * @param scpi Previously initialised SCPI device structure.
@@ -362,12 +379,14 @@ SR_PRIV int sr_scpi_close(struct sr_scpi_dev_inst *scpi)
 /**
  * Free SCPI device.
  *
- * @param scpi Previously initialized SCPI device structure.
- *
- * @return SR_OK on success, SR_ERR on failure.
+ * @param scpi Previously initialized SCPI device structure. If NULL,
+ *             this function does nothing.
  */
 SR_PRIV void sr_scpi_free(struct sr_scpi_dev_inst *scpi)
 {
+	if (!scpi)
+		return;
+
 	scpi->free(scpi->priv);
 	g_free(scpi->priv);
 	g_free(scpi);
@@ -385,41 +404,13 @@ SR_PRIV void sr_scpi_free(struct sr_scpi_dev_inst *scpi)
 SR_PRIV int sr_scpi_get_string(struct sr_scpi_dev_inst *scpi,
 			       const char *command, char **scpi_response)
 {
-	char buf[256];
-	int len;
 	GString *response;
-	gint64 laststart;
-	unsigned int elapsed_ms;
+	response = g_string_sized_new(1024);
 
-	if (command)
-		if (sr_scpi_send(scpi, command) != SR_OK)
-			return SR_ERR;
-
-	if (sr_scpi_read_begin(scpi) != SR_OK)
+	if (sr_scpi_get_data(scpi, command, &response) != SR_OK) {
+		if (response)
+			g_string_free(response, TRUE);
 		return SR_ERR;
-
-	laststart = g_get_monotonic_time();
-
-	response = g_string_new("");
-
-	*scpi_response = NULL;
-
-	while (!sr_scpi_read_complete(scpi)) {
-		len = sr_scpi_read_data(scpi, buf, sizeof(buf));
-		if (len < 0) {
-			sr_err("Incompletely read SCPI response.");
-			g_string_free(response, TRUE);
-			return SR_ERR;
-		} else if (len > 0) {
-		        laststart = g_get_monotonic_time();
-		}
-		g_string_append_len(response, buf, len);
-		elapsed_ms = (g_get_monotonic_time() - laststart) / 1000;
-		if (elapsed_ms >= scpi->read_timeout_ms) {
-			sr_err("Timed out waiting for SCPI response.");
-			g_string_free(response, TRUE);
-			return SR_ERR;
-		}
 	}
 
 	/* Get rid of trailing linefeed if present */
@@ -434,6 +425,86 @@ SR_PRIV int sr_scpi_get_string(struct sr_scpi_dev_inst *scpi,
 		response->str, response->len);
 
 	*scpi_response = g_string_free(response, FALSE);
+
+	return SR_OK;
+}
+
+/**
+ * Do a non-blocking read of up to the allocated length, and
+ * check if a timeout has occured.
+ *
+ * @param scpi Previously initialised SCPI device structure.
+ * @param response Buffer to which the response is appended.
+ * @param abs_timeout_us Absolute timeout in microseconds
+ *
+ * @return read length on success, SR_ERR* on failure.
+ */
+SR_PRIV int sr_scpi_read_response(struct sr_scpi_dev_inst *scpi,
+				  GString *response, gint64 abs_timeout_us)
+{
+	int len, space;
+
+	space = response->allocated_len - response->len;
+	len = sr_scpi_read_data(scpi, &response->str[response->len], space);
+
+	if (len < 0) {
+		sr_err("Incompletely read SCPI response.");
+		return SR_ERR;
+	}
+
+	if (len > 0) {
+		g_string_set_size(response, response->len + len);
+		return len;
+	}
+
+	if (g_get_monotonic_time() > abs_timeout_us) {
+		sr_err("Timed out waiting for SCPI response.");
+		return SR_ERR_TIMEOUT;
+	}
+
+	return 0;
+}
+
+SR_PRIV int sr_scpi_get_data(struct sr_scpi_dev_inst *scpi,
+			     const char *command, GString **scpi_response)
+{
+	int ret;
+	GString *response;
+	int space;
+	gint64 timeout;
+
+	/* Optionally send caller provided command. */
+	if (command) {
+		if (sr_scpi_send(scpi, command) != SR_OK)
+			return SR_ERR;
+	}
+
+	/* Initiate SCPI read operation. */
+	if (sr_scpi_read_begin(scpi) != SR_OK)
+		return SR_ERR;
+
+	/* Keep reading until completion or until timeout. */
+	timeout = g_get_monotonic_time() + scpi->read_timeout_us;
+
+	response = *scpi_response;
+
+	while (!sr_scpi_read_complete(scpi)) {
+		/* Resize the buffer when free space drops below a threshold. */
+		space = response->allocated_len - response->len;
+		if (space < 128) {
+			int oldlen = response->len;
+			g_string_set_size(response, oldlen + 1024);
+			g_string_set_size(response, oldlen);
+		}
+
+		/* Read another chunk of the response. */
+		ret = sr_scpi_read_response(scpi, response, timeout);
+
+		if (ret < 0)
+			return ret;
+		if (ret > 0)
+			timeout = g_get_monotonic_time() + scpi->read_timeout_us;
+	}
 
 	return SR_OK;
 }
@@ -703,6 +774,123 @@ SR_PRIV int sr_scpi_get_uint8v(struct sr_scpi_dev_inst *scpi,
 }
 
 /**
+ * Send a SCPI command, read the reply, parse it as binary data with a
+ * "definite length block" header and store the as an result in scpi_response.
+ *
+ * @param scpi Previously initialised SCPI device structure.
+ * @param command The SCPI command to send to the device (can be NULL).
+ * @param scpi_response Pointer where to store the parsed result.
+ *
+ * @return SR_OK upon successfully parsing all values, SR_ERR* upon a parsing
+ *         error or upon no response. The allocated response must be freed by
+ *         the caller in the case of an SR_OK as well as in the case of
+ *         parsing error.
+ */
+SR_PRIV int sr_scpi_get_block(struct sr_scpi_dev_inst *scpi,
+			       const char *command, GByteArray **scpi_response)
+{
+	int ret;
+	GString* response;
+	char buf[10];
+	long llen;
+	long datalen;
+	gint64 timeout;
+
+	if (command)
+		if (sr_scpi_send(scpi, command) != SR_OK)
+			return SR_ERR;
+
+	if (sr_scpi_read_begin(scpi) != SR_OK)
+		return SR_ERR;
+
+	/*
+	 * Assume an initial maximum length, optionally gets adjusted below.
+	 * Prepare a NULL return value for when error paths will be taken.
+	 */
+	response = g_string_sized_new(1024);
+
+	timeout = g_get_monotonic_time() + scpi->read_timeout_us;
+
+	*scpi_response = NULL;
+
+	/* Get (the first chunk of) the response. */
+	while (response->len < 2) {
+		ret = sr_scpi_read_response(scpi, response, timeout);
+		if (ret < 0) {
+			g_string_free(response, TRUE);
+			return ret;
+		}
+	}
+
+	/*
+	 * SCPI protocol data blocks are preceeded with a length spec.
+	 * The length spec consists of a '#' marker, one digit which
+	 * specifies the character count of the length spec, and the
+	 * respective number of characters which specify the data block's
+	 * length. Raw data bytes follow (thus one must no longer assume
+	 * that the received input stream would be an ASCIIZ string).
+	 *
+	 * Get the data block length, and strip off the length spec from
+	 * the input buffer, leaving just the data bytes.
+	 */
+	if (response->str[0] != '#') {
+		g_string_free(response, TRUE);
+		return SR_ERR_DATA;
+	}
+	buf[0] = response->str[1];
+	buf[1] = '\0';
+	ret = sr_atol(buf, &llen);
+	if ((ret != SR_OK) || (llen == 0)) {
+		g_string_free(response, TRUE);
+		return ret;
+	}
+
+	while (response->len < (unsigned long)(2 + llen)) {
+		ret = sr_scpi_read_response(scpi, response, timeout);
+		if (ret < 0) {
+			g_string_free(response, TRUE);
+			return ret;
+		}
+	}
+
+	memcpy(buf, &response->str[2], llen);
+	buf[llen] = '\0';
+	ret = sr_atol(buf, &datalen);
+	if ((ret != SR_OK) || (datalen == 0)) {
+		g_string_free(response, TRUE);
+		return ret;
+	}
+	g_string_erase(response, 0, 2 + llen);
+
+	/*
+	 * If the initially assumed length does not cover the data block
+	 * length, then re-allocate the buffer size to the now known
+	 * length, and keep reading more chunks of response data.
+	 */
+	if (response->len < (unsigned long)(datalen)) {
+		int oldlen = response->len;
+		g_string_set_size(response, datalen);
+		g_string_set_size(response, oldlen);
+	}
+
+	while (response->len < (unsigned long)(datalen)) {
+		ret = sr_scpi_read_response(scpi, response, timeout);
+		if (ret < 0) {
+			g_string_free(response, TRUE);
+			return ret;
+		}
+		if (ret > 0)
+			timeout = g_get_monotonic_time() + scpi->read_timeout_us;
+	}
+
+	/* Convert received data to byte array. */
+	*scpi_response = g_byte_array_new_take(
+		(guint8*)g_string_free(response, FALSE), datalen);
+
+	return SR_OK;
+}
+
+/**
  * Send the *IDN? SCPI command, receive the reply, parse it and store the
  * reply as a sr_scpi_hw_info structure in the supplied scpi_response pointer.
  *
@@ -763,17 +951,17 @@ SR_PRIV int sr_scpi_get_hw_id(struct sr_scpi_dev_inst *scpi,
 /**
  * Free a sr_scpi_hw_info struct.
  *
- * @param hw_info Pointer to the struct to free.
- *
- * This function is safe to call with a NULL pointer.
+ * @param hw_info Pointer to the struct to free. If NULL, this
+ *                function does nothing.
  */
 SR_PRIV void sr_scpi_hw_info_free(struct sr_scpi_hw_info *hw_info)
 {
-	if (hw_info) {
-		g_free(hw_info->manufacturer);
-		g_free(hw_info->model);
-		g_free(hw_info->serial_number);
-		g_free(hw_info->firmware_version);
-		g_free(hw_info);
-	}
+	if (!hw_info)
+		return;
+
+	g_free(hw_info->manufacturer);
+	g_free(hw_info->model);
+	g_free(hw_info->serial_number);
+	g_free(hw_info->firmware_version);
+	g_free(hw_info);
 }

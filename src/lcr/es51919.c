@@ -415,9 +415,6 @@ static const char *const models[] = {
 
 /** Private, per-device-instance driver context. */
 struct dev_context {
-	/** Opaque pointer passed in by the frontend. */
-	void *cb_data;
-
 	/** The number of frames. */
 	struct dev_limit_counter frame_count;
 
@@ -470,51 +467,53 @@ static int parse_mq(const uint8_t *pkt, int is_secondary, int is_parallel)
 
 	sr_err("Unknown quantity 0x%03x.", is_secondary << 8 | buf[0]);
 
-	return -1;
+	return 0;
 }
 
-static float parse_value(const uint8_t *buf)
+static float parse_value(const uint8_t *buf, int *digits)
 {
-	static const float decimals[] = {
-		1, 1e-1, 1e-2, 1e-3, 1e-4, 1e-5, 1e-6, 1e-7
-	};
+	static const int exponents[] = {0, -1, -2, -3, -4, -5, -6, -7};
+	int exponent;
 	int16_t val;
 
+	exponent = exponents[buf[3] & 7];
+	*digits = -exponent;
 	val = (buf[1] << 8) | buf[2];
-	return (float)val * decimals[buf[3] & 7];
+	return (float)val * powf(10, exponent);
 }
 
 static void parse_measurement(const uint8_t *pkt, float *floatval,
-			      struct sr_datafeed_analog_old *analog,
+			      struct sr_datafeed_analog *analog,
 			      int is_secondary)
 {
 	static const struct {
 		int unit;
-		float mult;
+		int exponent;
 	} units[] = {
-		{ SR_UNIT_UNITLESS, 1 },	/* no unit */
-		{ SR_UNIT_OHM, 1 },		/* Ohm     */
-		{ SR_UNIT_OHM, 1e3 },		/* kOhm    */
-		{ SR_UNIT_OHM, 1e6 },		/* MOhm    */
-		{ -1, 0 },			/* ???     */
-		{ SR_UNIT_HENRY, 1e-6 },	/* uH      */
-		{ SR_UNIT_HENRY, 1e-3 },	/* mH      */
-		{ SR_UNIT_HENRY, 1 },		/* H       */
-		{ SR_UNIT_HENRY, 1e3 },		/* kH      */
-		{ SR_UNIT_FARAD, 1e-12 },	/* pF      */
-		{ SR_UNIT_FARAD, 1e-9 },	/* nF      */
-		{ SR_UNIT_FARAD, 1e-6 },	/* uF      */
-		{ SR_UNIT_FARAD, 1e-3 },	/* mF      */
-		{ SR_UNIT_PERCENTAGE, 1 },	/* %       */
-		{ SR_UNIT_DEGREE, 1 }		/* degree  */
+		{ SR_UNIT_UNITLESS,   0 }, /* no unit */
+		{ SR_UNIT_OHM,        0 }, /* Ohm */
+		{ SR_UNIT_OHM,        3 }, /* kOhm */
+		{ SR_UNIT_OHM,        6 }, /* MOhm */
+		{ -1,                 0 }, /* ??? */
+		{ SR_UNIT_HENRY,     -6 }, /* uH */
+		{ SR_UNIT_HENRY,     -3 }, /* mH */
+		{ SR_UNIT_HENRY,      0 }, /* H */
+		{ SR_UNIT_HENRY,      3 }, /* kH */
+		{ SR_UNIT_FARAD,    -12 }, /* pF */
+		{ SR_UNIT_FARAD,     -9 }, /* nF */
+		{ SR_UNIT_FARAD,     -6 }, /* uF */
+		{ SR_UNIT_FARAD,     -3 }, /* mF */
+		{ SR_UNIT_PERCENTAGE, 0 }, /* % */
+		{ SR_UNIT_DEGREE,     0 }, /* degree */
 	};
 	const uint8_t *buf;
+	int digits, exponent;
 	int state;
 
 	buf = pkt_to_buf(pkt, is_secondary);
 
-	analog->mq = -1;
-	analog->mqflags = 0;
+	analog->meaning->mq = 0;
+	analog->meaning->mqflags = 0;
 
 	state = buf[4] & 0xf;
 
@@ -528,27 +527,30 @@ static void parse_measurement(const uint8_t *pkt, float *floatval,
 
 	if (!is_secondary) {
 		if (pkt[2] & 0x01)
-			analog->mqflags |= SR_MQFLAG_HOLD;
+			analog->meaning->mqflags |= SR_MQFLAG_HOLD;
 		if (pkt[2] & 0x02)
-			analog->mqflags |= SR_MQFLAG_REFERENCE;
+			analog->meaning->mqflags |= SR_MQFLAG_REFERENCE;
 	} else {
 		if (pkt[2] & 0x04)
-			analog->mqflags |= SR_MQFLAG_RELATIVE;
+			analog->meaning->mqflags |= SR_MQFLAG_RELATIVE;
 	}
 
-	if ((analog->mq = parse_mq(pkt, is_secondary, pkt[2] & 0x80)) < 0)
+	if ((analog->meaning->mq = parse_mq(pkt, is_secondary, pkt[2] & 0x80)) == 0)
 		return;
 
 	if ((buf[3] >> 3) >= ARRAY_SIZE(units)) {
 		sr_err("Unknown unit %u.", buf[3] >> 3);
-		analog->mq = -1;
+		analog->meaning->mq = 0;
 		return;
 	}
 
-	analog->unit = units[buf[3] >> 3].unit;
+	analog->meaning->unit = units[buf[3] >> 3].unit;
 
-	*floatval = parse_value(buf);
-	*floatval *= (state == 0) ? units[buf[3] >> 3].mult : INFINITY;
+	exponent = units[buf[3] >> 3].exponent;
+	*floatval = parse_value(buf, &digits);
+	*floatval *= (state == 0) ? powf(10, exponent) : INFINITY;
+	analog->encoding->digits = digits - exponent;
+	analog->spec->spec_digits = digits - exponent;
 }
 
 static unsigned int parse_freq(const uint8_t *pkt)
@@ -595,11 +597,7 @@ static gboolean packet_valid(const uint8_t *pkt)
 static int do_config_update(struct sr_dev_inst *sdi, uint32_t key,
 			    GVariant *var)
 {
-	struct dev_context *devc;
-
-	devc = sdi->priv;
-
-	return send_config_update_key(devc->cb_data, key, var);
+	return send_config_update_key(sdi, key, var);
 }
 
 static int send_freq_update(struct sr_dev_inst *sdi, unsigned int freq)
@@ -617,7 +615,10 @@ static int send_model_update(struct sr_dev_inst *sdi, unsigned int model)
 static void handle_packet(struct sr_dev_inst *sdi, const uint8_t *pkt)
 {
 	struct sr_datafeed_packet packet;
-	struct sr_datafeed_analog_old analog;
+	struct sr_datafeed_analog analog;
+	struct sr_analog_encoding encoding;
+	struct sr_analog_meaning meaning;
+	struct sr_analog_spec spec;
 	struct dev_context *devc;
 	unsigned int val;
 	float floatval;
@@ -643,49 +644,50 @@ static void handle_packet(struct sr_dev_inst *sdi, const uint8_t *pkt)
 
 	frame = FALSE;
 
-	memset(&analog, 0, sizeof(analog));
+	/* Note: digits/spec_digits will be overridden later. */
+	sr_analog_init(&analog, &encoding, &meaning, &spec, 0);
 
 	analog.num_samples = 1;
 	analog.data = &floatval;
 
-	analog.channels = g_slist_append(NULL, sdi->channels->data);
+	analog.meaning->channels = g_slist_append(NULL, sdi->channels->data);
 
 	parse_measurement(pkt, &floatval, &analog, 0);
-	if (analog.mq >= 0) {
+	if (analog.meaning->mq != 0) {
 		if (!frame) {
 			packet.type = SR_DF_FRAME_BEGIN;
-			sr_session_send(devc->cb_data, &packet);
+			sr_session_send(sdi, &packet);
 			frame = TRUE;
 		}
 
-		packet.type = SR_DF_ANALOG_OLD;
+		packet.type = SR_DF_ANALOG;
 		packet.payload = &analog;
 
-		sr_session_send(devc->cb_data, &packet);
+		sr_session_send(sdi, &packet);
 	}
 
-	g_slist_free(analog.channels);
-	analog.channels = g_slist_append(NULL, sdi->channels->next->data);
+	g_slist_free(analog.meaning->channels);
+	analog.meaning->channels = g_slist_append(NULL, sdi->channels->next->data);
 
 	parse_measurement(pkt, &floatval, &analog, 1);
-	if (analog.mq >= 0) {
+	if (analog.meaning->mq != 0) {
 		if (!frame) {
 			packet.type = SR_DF_FRAME_BEGIN;
-			sr_session_send(devc->cb_data, &packet);
+			sr_session_send(sdi, &packet);
 			frame = TRUE;
 		}
 
-		packet.type = SR_DF_ANALOG_OLD;
+		packet.type = SR_DF_ANALOG;
 		packet.payload = &analog;
 
-		sr_session_send(devc->cb_data, &packet);
+		sr_session_send(sdi, &packet);
 	}
 
-	g_slist_free(analog.channels);
+	g_slist_free(analog.meaning->channels);
 
 	if (frame) {
 		packet.type = SR_DF_FRAME_END;
-		sr_session_send(devc->cb_data, &packet);
+		sr_session_send(sdi, &packet);
 		dev_limit_counter_inc(&devc->frame_count);
 	}
 }
@@ -729,7 +731,7 @@ static int receive_data(int fd, int revents, void *cb_data)
 
 	if (dev_limit_counter_limit_reached(&devc->frame_count) ||
 	    dev_time_limit_reached(&devc->time_count))
-		sdi->driver->dev_acquisition_stop(sdi, cb_data);
+		sdi->driver->dev_acquisition_stop(sdi);
 
 	return TRUE;
 }
@@ -739,14 +741,11 @@ static const char *const channel_names[] = { "P1", "P2" };
 static int setup_channels(struct sr_dev_inst *sdi)
 {
 	unsigned int i;
-	int ret;
-
-	ret = SR_ERR_BUG;
 
 	for (i = 0; i < ARRAY_SIZE(channel_names); i++)
 		sr_channel_new(sdi, i, SR_CHANNEL_ANALOG, TRUE, channel_names[i]);
 
-	return ret;
+	return SR_OK;
 }
 
 SR_PRIV void es51919_serial_clean(void *priv)
@@ -800,10 +799,8 @@ SR_PRIV struct sr_dev_inst *es51919_serial_scan(GSList *options,
 
 scan_cleanup:
 	es51919_serial_clean(devc);
-	if (sdi)
-		sr_dev_inst_free(sdi);
-	if (serial)
-		sr_serial_dev_inst_free(serial);
+	sr_dev_inst_free(sdi);
+	sr_serial_dev_inst_free(serial);
 
 	return NULL;
 }
@@ -816,8 +813,7 @@ SR_PRIV int es51919_serial_config_get(uint32_t key, GVariant **data,
 
 	(void)cg;
 
-	if (!(devc = sdi->priv))
-		return SR_ERR_BUG;
+	devc = sdi->priv;
 
 	switch (key) {
 	case SR_CONF_OUTPUT_FREQUENCY:
@@ -827,7 +823,6 @@ SR_PRIV int es51919_serial_config_get(uint32_t key, GVariant **data,
 		*data = g_variant_new_string(models[devc->model]);
 		break;
 	default:
-		sr_spew("%s: Unsupported key %u", __func__, key);
 		return SR_ERR_NA;
 	}
 
@@ -903,15 +898,13 @@ SR_PRIV int es51919_serial_config_list(uint32_t key, GVariant **data,
 		*data = g_variant_new_strv(models, ARRAY_SIZE(models));
 		break;
 	default:
-		sr_spew("%s: Unsupported key %u", __func__, key);
 		return SR_ERR_NA;
 	}
 
 	return SR_OK;
 }
 
-SR_PRIV int es51919_serial_acquisition_start(const struct sr_dev_inst *sdi,
-					     void *cb_data)
+SR_PRIV int es51919_serial_acquisition_start(const struct sr_dev_inst *sdi)
 {
 	struct dev_context *devc;
 	struct sr_serial_dev_inst *serial;
@@ -922,13 +915,10 @@ SR_PRIV int es51919_serial_acquisition_start(const struct sr_dev_inst *sdi,
 	if (!(devc = sdi->priv))
 		return SR_ERR_BUG;
 
-	devc->cb_data = cb_data;
-
 	dev_limit_counter_start(&devc->frame_count);
 	dev_time_counter_start(&devc->time_count);
 
-	/* Send header packet to the session bus. */
-	std_session_send_df_header(cb_data, LOG_PREFIX);
+	std_session_send_df_header(sdi);
 
 	/* Poll every 50ms, or whenever some data comes in. */
 	serial = sdi->conn;
@@ -936,11 +926,4 @@ SR_PRIV int es51919_serial_acquisition_start(const struct sr_dev_inst *sdi,
 			  receive_data, (void *)sdi);
 
 	return SR_OK;
-}
-
-SR_PRIV int es51919_serial_acquisition_stop(struct sr_dev_inst *sdi,
-					    void *cb_data)
-{
-	return std_serial_dev_acquisition_stop(sdi, cb_data,
-			std_serial_dev_close, sdi->conn, LOG_PREFIX);
 }

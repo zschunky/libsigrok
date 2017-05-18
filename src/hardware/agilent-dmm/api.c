@@ -25,7 +25,7 @@
 #include <string.h>
 #include <libsigrok/libsigrok.h>
 #include "libsigrok-internal.h"
-#include "agilent-dmm.h"
+#include "protocol.h"
 
 static const uint32_t scanopts[] = {
 	SR_CONF_CONN,
@@ -37,50 +37,67 @@ static const uint32_t drvopts[] = {
 };
 
 static const uint32_t devopts[] = {
-	SR_CONF_CONTINUOUS | SR_CONF_SET,
-	SR_CONF_LIMIT_SAMPLES | SR_CONF_SET,
-	SR_CONF_LIMIT_MSEC | SR_CONF_SET,
+	SR_CONF_CONTINUOUS,
+	SR_CONF_LIMIT_SAMPLES | SR_CONF_GET | SR_CONF_SET,
+	SR_CONF_LIMIT_MSEC | SR_CONF_GET | SR_CONF_SET,
+	SR_CONF_SAMPLERATE | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
+	SR_CONF_DATA_SOURCE | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
 };
 
-extern const struct agdmm_job agdmm_jobs_u12xx[];
+static const uint64_t samplerates[] = {
+	SR_HZ(1),
+	SR_HZ(20),
+	SR_HZ(1),
+};
+
+static const char *data_sources[] = {
+	"Live",
+	"Log-Hand",
+	"Log-Trig",
+	"Log-Auto",
+	"Log-Export",
+};
+
+extern const struct agdmm_job agdmm_jobs_live[];
+extern const struct agdmm_job agdmm_jobs_log[];
 extern const struct agdmm_recv agdmm_recvs_u123x[];
 extern const struct agdmm_recv agdmm_recvs_u124x[];
+extern const struct agdmm_recv agdmm_recvs_u124xc[];
 extern const struct agdmm_recv agdmm_recvs_u125x[];
+extern const struct agdmm_recv agdmm_recvs_u128x[];
 
 /* This works on all the Agilent U12xxA series, although the
  * U127xA can apparently also run at 19200/8n1. */
 #define SERIALCOMM "9600/8n1"
 
 static const struct agdmm_profile supported_agdmm[] = {
-	{ AGILENT_U1231, "U1231A", agdmm_jobs_u12xx, agdmm_recvs_u123x },
-	{ AGILENT_U1232, "U1232A", agdmm_jobs_u12xx, agdmm_recvs_u123x },
-	{ AGILENT_U1233, "U1233A", agdmm_jobs_u12xx, agdmm_recvs_u123x },
+	{ AGILENT_U1231, "U1231A", 1, agdmm_jobs_live, NULL, agdmm_recvs_u123x },
+	{ AGILENT_U1232, "U1232A", 1, agdmm_jobs_live, NULL, agdmm_recvs_u123x },
+	{ AGILENT_U1233, "U1233A", 1, agdmm_jobs_live, NULL, agdmm_recvs_u123x },
 
-	{ AGILENT_U1241, "U1241A", agdmm_jobs_u12xx, agdmm_recvs_u124x },
-	{ AGILENT_U1242, "U1242A", agdmm_jobs_u12xx, agdmm_recvs_u124x },
-	{ AGILENT_U1241, "U1241B", agdmm_jobs_u12xx, agdmm_recvs_u124x },
-	{ AGILENT_U1242, "U1242B", agdmm_jobs_u12xx, agdmm_recvs_u124x },
+	{ AGILENT_U1241, "U1241A", 2, agdmm_jobs_live, NULL, agdmm_recvs_u124x },
+	{ AGILENT_U1242, "U1242A", 2, agdmm_jobs_live, NULL, agdmm_recvs_u124x },
+	{ AGILENT_U1241, "U1241B", 2, agdmm_jobs_live, NULL, agdmm_recvs_u124x },
+	{ AGILENT_U1242, "U1242B", 2, agdmm_jobs_live, NULL, agdmm_recvs_u124x },
 
-	{ AGILENT_U1251, "U1251A", agdmm_jobs_u12xx, agdmm_recvs_u125x },
-	{ AGILENT_U1252, "U1252A", agdmm_jobs_u12xx, agdmm_recvs_u125x },
-	{ AGILENT_U1253, "U1253A", agdmm_jobs_u12xx, agdmm_recvs_u125x },
-	{ AGILENT_U1251, "U1251B", agdmm_jobs_u12xx, agdmm_recvs_u125x },
-	{ AGILENT_U1252, "U1252B", agdmm_jobs_u12xx, agdmm_recvs_u125x },
-	{ AGILENT_U1253, "U1253B", agdmm_jobs_u12xx, agdmm_recvs_u125x },
+	{ KEYSIGHT_U1241C, "U1241C", 2, agdmm_jobs_live, agdmm_jobs_log, agdmm_recvs_u124xc },
+	{ KEYSIGHT_U1242C, "U1242C", 2, agdmm_jobs_live, agdmm_jobs_log, agdmm_recvs_u124xc },
+
+	{ AGILENT_U1251, "U1251A", 3, agdmm_jobs_live, NULL, agdmm_recvs_u125x },
+	{ AGILENT_U1252, "U1252A", 3, agdmm_jobs_live, NULL, agdmm_recvs_u125x },
+	{ AGILENT_U1253, "U1253A", 3, agdmm_jobs_live, NULL, agdmm_recvs_u125x },
+	{ AGILENT_U1251, "U1251B", 3, agdmm_jobs_live, NULL, agdmm_recvs_u125x },
+	{ AGILENT_U1252, "U1252B", 3, agdmm_jobs_live, NULL, agdmm_recvs_u125x },
+	{ AGILENT_U1253, "U1253B", 3, agdmm_jobs_live, NULL, agdmm_recvs_u125x },
+
+	{ KEYSIGHT_U1281, "U1281A", 3, agdmm_jobs_live, agdmm_jobs_log, agdmm_recvs_u128x },
+	{ KEYSIGHT_U1282, "U1282A", 3, agdmm_jobs_live, agdmm_jobs_log, agdmm_recvs_u128x },
 	ALL_ZERO
 };
-
-SR_PRIV struct sr_dev_driver agdmm_driver_info;
-
-static int init(struct sr_dev_driver *di, struct sr_context *sr_ctx)
-{
-	return std_init(sr_ctx, di, LOG_PREFIX);
-}
 
 static GSList *scan(struct sr_dev_driver *di, GSList *options)
 {
 	struct sr_dev_inst *sdi;
-	struct drv_context *drvc;
 	struct dev_context *devc;
 	struct sr_config *src;
 	struct sr_serial_dev_inst *serial;
@@ -88,9 +105,6 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 	int len, i;
 	const char *conn, *serialcomm;
 	char *buf, **tokens;
-
-	drvc = di->context;
-	drvc->instances = NULL;
 
 	devices = NULL;
 	conn = serialcomm = NULL;
@@ -128,25 +142,37 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 		return NULL;
 
 	tokens = g_strsplit(buf, ",", 4);
-	if (!strcmp("Agilent Technologies", tokens[0])
+	if ((!strcmp("Agilent Technologies", tokens[0]) ||
+	     !strcmp("Keysight Technologies", tokens[0]))
 			&& tokens[1] && tokens[2] && tokens[3]) {
 		for (i = 0; supported_agdmm[i].model; i++) {
 			if (strcmp(supported_agdmm[i].modelname, tokens[1]))
 				continue;
 			sdi = g_malloc0(sizeof(struct sr_dev_inst));
 			sdi->status = SR_ST_INACTIVE;
-			sdi->vendor = g_strdup("Agilent");
+			sdi->vendor = g_strdup(tokens[0][0] == 'A' ? "Agilent" : "Keysight");
 			sdi->model = g_strdup(tokens[1]);
 			sdi->version = g_strdup(tokens[3]);
 			devc = g_malloc0(sizeof(struct dev_context));
+			sr_sw_limits_init(&devc->limits);
 			devc->profile = &supported_agdmm[i];
-			devc->cur_mq = -1;
+			devc->data_source = DEFAULT_DATA_SOURCE;
+			devc->cur_samplerate = 5;
+			if (supported_agdmm[i].nb_channels > 1) {
+				int temp_chan = supported_agdmm[i].nb_channels - 1;
+				devc->cur_mq[temp_chan] = SR_MQ_TEMPERATURE;
+				devc->cur_unit[temp_chan] = SR_UNIT_CELSIUS;
+				devc->cur_digits[temp_chan] = 1;
+				devc->cur_encoding[temp_chan] = 2;
+			}
 			sdi->inst_type = SR_INST_SERIAL;
 			sdi->conn = serial;
 			sdi->priv = devc;
-			sdi->driver = di;
 			sr_channel_new(sdi, 0, SR_CHANNEL_ANALOG, TRUE, "P1");
-			drvc->instances = g_slist_append(drvc->instances, sdi);
+			if (supported_agdmm[i].nb_channels > 1)
+				sr_channel_new(sdi, 1, SR_CHANNEL_ANALOG, TRUE, "P2");
+			if (supported_agdmm[i].nb_channels > 2)
+				sr_channel_new(sdi, 2, SR_CHANNEL_ANALOG, TRUE, "P3");
 			devices = g_slist_append(devices, sdi);
 			break;
 		}
@@ -158,67 +184,120 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 	if (!devices)
 		sr_serial_dev_inst_free(serial);
 
-	return devices;
+	return std_scan_complete(di, devices);
 }
 
-static GSList *dev_list(const struct sr_dev_driver *di)
+static int config_get(uint32_t key, GVariant **data, const struct sr_dev_inst *sdi,
+		const struct sr_channel_group *cg)
 {
-	return ((struct drv_context *)(di->context))->instances;
-}
+	struct dev_context *devc;
+	int ret;
 
-static int cleanup(const struct sr_dev_driver *di)
-{
-	return std_dev_clear(di, NULL);
+	(void)cg;
+
+	devc = sdi->priv;
+
+	ret = SR_OK;
+	switch (key) {
+	case SR_CONF_SAMPLERATE:
+		*data = g_variant_new_uint64(devc->cur_samplerate);
+		break;
+	case SR_CONF_LIMIT_SAMPLES:
+	case SR_CONF_LIMIT_MSEC:
+		ret = sr_sw_limits_config_get(&devc->limits, key, data);
+		break;
+	case SR_CONF_DATA_SOURCE:
+		*data = g_variant_new_string(data_sources[devc->data_source]);
+		break;
+	default:
+		return SR_ERR_NA;
+	}
+
+	return ret;
 }
 
 static int config_set(uint32_t key, GVariant *data, const struct sr_dev_inst *sdi,
 		const struct sr_channel_group *cg)
 {
 	struct dev_context *devc;
+	uint64_t samplerate;
+	const char *tmp_str;
+	unsigned int i;
+	int ret;
 
 	(void)cg;
 
 	if (sdi->status != SR_ST_ACTIVE)
 		return SR_ERR_DEV_CLOSED;
 
-	if (!(devc = sdi->priv)) {
-		sr_err("sdi->priv was NULL.");
-		return SR_ERR_BUG;
-	}
+	devc = sdi->priv;
 
+	ret = SR_OK;
 	switch (key) {
-	case SR_CONF_LIMIT_MSEC:
-		/* TODO: not yet implemented */
-		devc->limit_msec = g_variant_get_uint64(data);
+	case SR_CONF_SAMPLERATE:
+		samplerate = g_variant_get_uint64(data);
+		if (samplerate < samplerates[0] || samplerate > samplerates[1])
+			ret = SR_ERR_ARG;
+		else
+			devc->cur_samplerate = g_variant_get_uint64(data);
 		break;
 	case SR_CONF_LIMIT_SAMPLES:
-		devc->limit_samples = g_variant_get_uint64(data);
+	case SR_CONF_LIMIT_MSEC:
+		ret = sr_sw_limits_config_set(&devc->limits, key, data);
 		break;
+	case SR_CONF_DATA_SOURCE: {
+		tmp_str = g_variant_get_string(data, NULL);
+		for (i = 0; i < ARRAY_SIZE(data_sources); i++)
+			if (!strcmp(tmp_str, data_sources[i])) {
+				devc->data_source = i;
+				break;
+			}
+		if (i == ARRAY_SIZE(data_sources))
+			return SR_ERR;
+		break;
+	}
 	default:
-		return SR_ERR_NA;
+		ret = SR_ERR_NA;
 	}
 
-	return SR_OK;
+	return ret;
 }
 
 static int config_list(uint32_t key, GVariant **data, const struct sr_dev_inst *sdi,
 		const struct sr_channel_group *cg)
 {
-	(void)sdi;
-	(void)cg;
+	GVariant *gvar;
+	GVariantBuilder gvb;
 
-	switch (key) {
-	case SR_CONF_SCAN_OPTIONS:
+	if (key == SR_CONF_SCAN_OPTIONS) {
 		*data = g_variant_new_fixed_array(G_VARIANT_TYPE_UINT32,
 				scanopts, ARRAY_SIZE(scanopts), sizeof(uint32_t));
-		break;
+		return SR_OK;
+	}
+
+	if (key == SR_CONF_DEVICE_OPTIONS && !sdi) {
+		*data = g_variant_new_fixed_array(G_VARIANT_TYPE_UINT32,
+				drvopts, ARRAY_SIZE(drvopts), sizeof(uint32_t));
+		return SR_OK;
+	}
+
+	if (!sdi || cg)
+		return SR_ERR_ARG;
+
+	switch (key) {
 	case SR_CONF_DEVICE_OPTIONS:
-		if (!sdi)
-			*data = g_variant_new_fixed_array(G_VARIANT_TYPE_UINT32,
-					drvopts, ARRAY_SIZE(drvopts), sizeof(uint32_t));
-		else
-			*data = g_variant_new_fixed_array(G_VARIANT_TYPE_UINT32,
-					devopts, ARRAY_SIZE(devopts), sizeof(uint32_t));
+		*data = g_variant_new_fixed_array(G_VARIANT_TYPE_UINT32,
+				devopts, ARRAY_SIZE(devopts), sizeof(uint32_t));
+		break;
+	case SR_CONF_SAMPLERATE:
+		g_variant_builder_init(&gvb, G_VARIANT_TYPE("a{sv}"));
+		gvar = g_variant_new_fixed_array(G_VARIANT_TYPE("t"), samplerates,
+				ARRAY_SIZE(samplerates), sizeof(uint64_t));
+		g_variant_builder_add(&gvb, "{sv}", "samplerate-steps", gvar);
+		*data = g_variant_builder_end(&gvb);
+		break;
+	case SR_CONF_DATA_SOURCE:
+		*data = g_variant_new_strv(data_sources, ARRAY_SIZE(data_sources));
 		break;
 	default:
 		return SR_ERR_NA;
@@ -227,53 +306,62 @@ static int config_list(uint32_t key, GVariant **data, const struct sr_dev_inst *
 	return SR_OK;
 }
 
-static int dev_acquisition_start(const struct sr_dev_inst *sdi, void *cb_data)
+static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 {
-	struct dev_context *devc;
+	struct dev_context *devc = sdi->priv;
 	struct sr_serial_dev_inst *serial;
 
 	if (sdi->status != SR_ST_ACTIVE)
 		return SR_ERR_DEV_CLOSED;
 
-	if (!(devc = sdi->priv)) {
-		sr_err("sdi->priv was NULL.");
-		return SR_ERR_BUG;
+	devc->cur_channel = sr_next_enabled_channel(sdi, NULL);
+	devc->cur_conf = sr_next_enabled_channel(sdi, NULL);
+	devc->cur_sample = 1;
+	devc->cur_mq[0] = -1;
+	if (devc->profile->nb_channels > 2)
+		devc->cur_mq[1] = -1;
+
+	if (devc->data_source == DATA_SOURCE_LIVE) {
+		devc->jobs = devc->profile->jobs_live;
+	} else {
+		devc->jobs = devc->profile->jobs_log;
+		if (!devc->jobs) {
+			sr_err("Log data source is not implemented for this model.");
+			return SR_ERR_NA;
+		}
+		if (!((struct sr_channel *)sdi->channels->data)->enabled) {
+			sr_err("Log data is only available for channel P1.");
+			return SR_ERR_NA;
+		}
 	}
 
-	devc->cb_data = cb_data;
+	sr_sw_limits_acquisition_start(&devc->limits);
+	std_session_send_df_header(sdi);
 
-	/* Send header packet to the session bus. */
-	std_session_send_df_header(cb_data, LOG_PREFIX);
-
-	/* Poll every 100ms, or whenever some data comes in. */
+	/* Poll every 10ms, or whenever some data comes in. */
 	serial = sdi->conn;
-	serial_source_add(sdi->session, serial, G_IO_IN, 100,
+	serial_source_add(sdi->session, serial, G_IO_IN, 10,
 			agdmm_receive_data, (void *)sdi);
 
 	return SR_OK;
 }
 
-static int dev_acquisition_stop(struct sr_dev_inst *sdi, void *cb_data)
-{
-	return std_serial_dev_acquisition_stop(sdi, cb_data, std_serial_dev_close,
-			sdi->conn, LOG_PREFIX);
-}
-
-SR_PRIV struct sr_dev_driver agdmm_driver_info = {
+static struct sr_dev_driver agdmm_driver_info = {
 	.name = "agilent-dmm",
 	.longname = "Agilent U12xx series DMMs",
 	.api_version = 1,
-	.init = init,
-	.cleanup = cleanup,
+	.init = std_init,
+	.cleanup = std_cleanup,
 	.scan = scan,
-	.dev_list = dev_list,
+	.dev_list = std_dev_list,
 	.dev_clear = NULL,
-	.config_get = NULL,
+	.config_get = config_get,
 	.config_set = config_set,
 	.config_list = config_list,
 	.dev_open = std_serial_dev_open,
 	.dev_close = std_serial_dev_close,
 	.dev_acquisition_start = dev_acquisition_start,
-	.dev_acquisition_stop = dev_acquisition_stop,
+	.dev_acquisition_stop = std_serial_dev_acquisition_stop,
 	.context = NULL,
 };
+SR_REGISTER_DEV_DRIVER(agdmm_driver_info);

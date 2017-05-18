@@ -94,6 +94,7 @@ SR_PKGLIBS_CXX=
 SR_PKGLIBS_PYTHON=
 SR_PKGLIBS_RUBY=
 SR_EXTRA_LIBS=
+SR_EXTRA_CXX_LIBS=
 
 SR_ARG_OPT_PKG([libserialport], [LIBSERIALPORT], [NEED_SERIAL],
 	[libserialport >= 0.1.1])
@@ -171,6 +172,9 @@ AS_IF([test "x$sr_cv_have_rpc" = xyes],
 # VXI support is only compiled if RPC support was found.
 AM_CONDITIONAL([NEED_RPC], [test "x$sr_cv_have_rpc" = xyes])
 
+# Check for compiler support of 128 bit integers
+AC_CHECK_TYPES([__int128_t, __uint128_t], [], [], [])
+
 ########################
 ##  Hardware drivers  ##
 ########################
@@ -208,7 +212,7 @@ m4_define([_SR_DRIVER], [
 	sr_driver_summary_append "$2" "$sr_hw_info"
 
 	AM_CONDITIONAL([$3], [test "x[$]$3" = xyes])
-	AM_COND_IF([$3], [AC_DEFINE([HAVE_$3], [1], [Whether to support $1 device.])])
+	AM_COND_IF([$3], [AC_DEFINE([HAVE_$3], [1], [Whether to support $1 device.]) AC_DEFINE([HAVE_DRIVERS], [1], [Whether at least one driver is enabled.])])
 ])
 
 ## SR_DRIVER(Device name, driver-name, [dependencies...])
@@ -229,15 +233,17 @@ SR_DRIVER([Center 3xx], [center-3xx], [libserialport])
 SR_DRIVER([ChronoVu LA], [chronovu-la], [libusb libftdi])
 SR_DRIVER([Colead SLM], [colead-slm], [libserialport])
 SR_DRIVER([Conrad DIGI 35 CPU], [conrad-digi-35-cpu], [libserialport])
-SR_DRIVER([DER EE DE-5000], [deree-de5000], [libserialport])
 SR_DRIVER([demo], [demo])
 SR_DRIVER([Fluke DMM], [fluke-dmm], [libserialport])
+SR_DRIVER([FTDI LA], [ftdi-la], [libusb libftdi])
 SR_DRIVER([fx2lafw], [fx2lafw], [libusb])
 SR_DRIVER([GMC MH 1x/2x], [gmc-mh-1x-2x], [libserialport])
 SR_DRIVER([GW Instek GDS-800], [gwinstek-gds-800], [libserialport])
 SR_DRIVER([Hameg HMO], [hameg-hmo], [libserialport])
 SR_DRIVER([Hantek 4032l], [hantek-4032l])
+SR_DRIVER([Hantek 6xxx], [hantek-6xxx], [libusb])
 SR_DRIVER([Hantek DSO], [hantek-dso], [libusb])
+SR_DRIVER([HP 3457A], [hp-3457a])
 SR_DRIVER([Hung-Chang DSO-2100], [hung-chang-dso-2100], [libieee1284])
 SR_DRIVER([Ikalogic Scanalogic-2], [ikalogic-scanalogic2], [libusb])
 SR_DRIVER([Ikalogic Scanaplus], [ikalogic-scanaplus], [libftdi])
@@ -246,17 +252,21 @@ SR_DRIVER([KERN scale], [kern-scale], [libserialport])
 SR_DRIVER([Korad KAxxxxP], [korad-kaxxxxp], [libserialport])
 SR_DRIVER([Lascar EL-USB], [lascar-el-usb], [libusb])
 SR_DRIVER([LeCroy LogicStudio], [lecroy-logicstudio], [libusb])
+SR_DRIVER([LeCroy X-Stream], [lecroy-xstream])
 SR_DRIVER([Manson HCS-3xxx], [manson-hcs-3xxx], [libserialport])
 SR_DRIVER([maynuo-m97], [maynuo-m97])
 SR_DRIVER([MIC 985xx], [mic-985xx], [libserialport])
 SR_DRIVER([Motech LPS 30x], [motech-lps-30x], [libserialport])
 SR_DRIVER([Norma DMM], [norma-dmm], [libserialport])
 SR_DRIVER([OpenBench Logic Sniffer], [openbench-logic-sniffer], [libserialport])
+SR_DRIVER([PCE PCE-322A], [pce-322a], [libserialport])
 SR_DRIVER([Pipistrello-OLS], [pipistrello-ols], [libftdi])
 SR_DRIVER([Rigol DS], [rigol-ds])
+SR_DRIVER([Rohde&Schwarz SME-0x], [rohde-schwarz-sme-0x], [libserialport])
 SR_DRIVER([Saleae Logic16], [saleae-logic16], [libusb])
 SR_DRIVER([SCPI PPS], [scpi-pps])
 SR_DRIVER([serial DMM], [serial-dmm], [libserialport])
+SR_DRIVER([serial LCR], [serial-lcr], [libserialport])
 SR_DRIVER([Sysclk LWLA], [sysclk-lwla], [libusb])
 SR_DRIVER([Teleinfo], [teleinfo], [libserialport])
 SR_DRIVER([Testo], [testo], [libusb])
@@ -301,7 +311,7 @@ AC_ARG_ENABLE([java],
 sr_cxx_missing=
 
 # Check if the C++ compiler supports the C++11 standard.
-AX_CXX_COMPILE_STDCXX_11([noext], [optional])
+AX_CXX_COMPILE_STDCXX([11], [noext], [optional])
 AS_IF([test "x$HAVE_CXX11" != x1],
 	[SR_APPEND([sr_cxx_missing], [', '], ['C++11'])])
 
@@ -314,6 +324,9 @@ AS_IF([test "x$sr_have_glibmm" != xyes],
 AC_CHECK_PROG([HAVE_DOXYGEN], [doxygen], [yes], [no])
 AS_IF([test "x$HAVE_DOXYGEN" != xyes],
 	[SR_APPEND([sr_cxx_missing], [', '], [Doxygen])])
+
+# Link C++ code with gnustl_shared if it exists (Android)
+SR_SEARCH_LIBS([SR_EXTRA_CXX_LIBS], [__cxa_throw], [gnustl_shared])
 
 # Python is needed for the C++ bindings.
 AM_PATH_PYTHON([2.7],
@@ -389,7 +402,7 @@ AS_IF([test "x$HAVE_PYMOD_NUMPY" != xyes],
 AC_CHECK_PROGS([SWIG], [swig swig3.0 swig2.0])
 AS_IF([test "x$SWIG" != x],
     AC_MSG_CHECKING([for $SWIG version])
-    [SWIG_VERSION=`$SWIG -version 2>&1 | sed -n 's/SWIG Version\s*//p'`]
+    [SWIG_VERSION=`$SWIG -version 2>&1 | sed -n 's/SWIG Version //p'`]
     AC_MSG_RESULT([$SWIG_VERSION]))
 AS_IF([test "x$SWIG" = x],
 	[SR_APPEND([sr_python_missing], [', '], [SWIG])])
@@ -555,6 +568,7 @@ libsigrok configuration summary:
  - Prefix.......................... $prefix
  - Building on..................... $build
  - Building for.................... $host
+ - Building shared / static........ $enable_shared / $enable_static
 
 Compile configuration:
  - C compiler...................... $CC
@@ -566,6 +580,7 @@ Compile configuration:
  - C++ compiler version............ $sr_cxx_version
  - C++ compiler flags.............. $CXXFLAGS
  - C++ compiler warnings........... $SR_WXXFLAGS
+ - Linker flags.................... $LDFLAGS
 
 Detected libraries (required):
  - glib-2.0 >= 2.32.0.............. $sr_glib_version

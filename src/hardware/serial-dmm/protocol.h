@@ -35,11 +35,15 @@ struct dmm_info {
 	uint32_t baudrate;
 	/** Packet size in bytes. */
 	int packet_size;
-	/** Request timeout [ms] before request is considered lost and a new
-	 *  one is sent. Used only if device needs polling. */
+	/**
+	 * Request timeout [ms] before request is considered lost and a new
+	 * one is sent. Used only if device needs polling.
+	 */
 	int64_t req_timeout_ms;
-	/** Delay between reception of packet and next request. Some DMMs
-	 *  need this. Used only if device needs polling. */
+	/**
+	 * Delay between reception of packet and next request. Some DMMs
+	 * need this. Used only if device needs polling.
+	 */
 	int64_t req_delay_ms;
 	/** Packet request function. */
 	int (*packet_request)(struct sr_serial_dev_inst *);
@@ -47,9 +51,9 @@ struct dmm_info {
 	gboolean (*packet_valid)(const uint8_t *);
 	/** Packet parsing function. */
 	int (*packet_parse)(const uint8_t *, float *,
-			    struct sr_datafeed_analog_old *, void *);
+			    struct sr_datafeed_analog *, void *);
 	/** */
-	void (*dmm_details)(struct sr_datafeed_analog_old *, void *);
+	void (*dmm_details)(struct sr_datafeed_analog *, void *);
 	/** Size of chipset info struct. */
 	gsize info_size;
 };
@@ -58,27 +62,16 @@ struct dmm_info {
 
 /** Private, per-device-instance driver context. */
 struct dev_context {
-	/** The current sampling limit (in number of samples). */
-	uint64_t limit_samples;
-
-	/** The time limit (in milliseconds). */
-	uint64_t limit_msec;
-
-	/** Opaque pointer passed in by the frontend. */
-	void *cb_data;
-
-	/** The current number of already received samples. */
-	uint64_t num_samples;
-
-	/** The starting time of current sampling run. */
-	int64_t starttime;
+	struct sr_sw_limits limits;
 
 	uint8_t buf[DMM_BUFSIZE];
 	int bufoffset;
 	int buflen;
 
-	/** The timestamp [µs] to send the next request.
-	 *  Used only if device needs polling. */
+	/**
+	 * The timestamp [µs] to send the next request.
+	 * Used only if device needs polling.
+	 */
 	int64_t req_next_at;
 };
 

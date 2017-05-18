@@ -56,6 +56,13 @@ enum {
 	SCPI_CMD_GET_DIG_DATA,
 	SCPI_CMD_GET_SAMPLE_RATE,
 	SCPI_CMD_GET_SAMPLE_RATE_LIVE,
+	SCPI_CMD_GET_DATA_FORMAT,
+	SCPI_CMD_GET_PROBE_FACTOR,
+	SCPI_CMD_SET_PROBE_FACTOR,
+	SCPI_CMD_GET_PROBE_UNIT,
+	SCPI_CMD_SET_PROBE_UNIT,
+	SCPI_CMD_GET_ANALOG_CHAN_NAME,
+	SCPI_CMD_GET_DIG_CHAN_NAME,
 };
 
 struct scpi_command {
@@ -84,10 +91,11 @@ struct sr_scpi_dev_inst {
 	int (*send)(void *priv, const char *command);
 	int (*read_begin)(void *priv);
 	int (*read_data)(void *priv, char *buf, int maxlen);
+	int (*write_data)(void *priv, char *buf, int len);
 	int (*read_complete)(void *priv);
 	int (*close)(struct sr_scpi_dev_inst *scpi);
 	void (*free)(void *priv);
-	unsigned int read_timeout_ms;
+	unsigned int read_timeout_us;
 	void *priv;
 	/* Only used for quirk workarounds, notably the Rigol DS1000 series. */
 	uint64_t firmware_version;
@@ -109,10 +117,13 @@ SR_PRIV int sr_scpi_send_variadic(struct sr_scpi_dev_inst *scpi,
 		const char *format, va_list args);
 SR_PRIV int sr_scpi_read_begin(struct sr_scpi_dev_inst *scpi);
 SR_PRIV int sr_scpi_read_data(struct sr_scpi_dev_inst *scpi, char *buf, int maxlen);
+SR_PRIV int sr_scpi_write_data(struct sr_scpi_dev_inst *scpi, char *buf, int len);
 SR_PRIV int sr_scpi_read_complete(struct sr_scpi_dev_inst *scpi);
 SR_PRIV int sr_scpi_close(struct sr_scpi_dev_inst *scpi);
 SR_PRIV void sr_scpi_free(struct sr_scpi_dev_inst *scpi);
 
+SR_PRIV int sr_scpi_read_response(struct sr_scpi_dev_inst *scpi,
+			GString *response, gint64 abs_timeout_us);
 SR_PRIV int sr_scpi_get_string(struct sr_scpi_dev_inst *scpi,
 			const char *command, char **scpi_response);
 SR_PRIV int sr_scpi_get_bool(struct sr_scpi_dev_inst *scpi,
@@ -128,6 +139,10 @@ SR_PRIV int sr_scpi_get_floatv(struct sr_scpi_dev_inst *scpi,
 			const char *command, GArray **scpi_response);
 SR_PRIV int sr_scpi_get_uint8v(struct sr_scpi_dev_inst *scpi,
 			const char *command, GArray **scpi_response);
+SR_PRIV int sr_scpi_get_data(struct sr_scpi_dev_inst *scpi,
+			const char *command, GString **scpi_response);
+SR_PRIV int sr_scpi_get_block(struct sr_scpi_dev_inst *scpi,
+			const char *command, GByteArray **scpi_response);
 SR_PRIV int sr_scpi_get_hw_id(struct sr_scpi_dev_inst *scpi,
 			struct sr_scpi_hw_info **scpi_response);
 SR_PRIV void sr_scpi_hw_info_free(struct sr_scpi_hw_info *hw_info);

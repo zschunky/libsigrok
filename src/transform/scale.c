@@ -14,8 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <config.h>
@@ -49,33 +48,13 @@ static int receive(const struct sr_transform *t,
 		struct sr_datafeed_packet **packet_out)
 {
 	struct context *ctx;
-	const struct sr_datafeed_analog_old *analog_old;
 	const struct sr_datafeed_analog *analog;
-	struct sr_channel *ch;
-	GSList *l;
-	float *fdata;
-	float factor;
-	int i, num_channels, c;
 
 	if (!t || !t->sdi || !packet_in || !packet_out)
 		return SR_ERR_ARG;
 	ctx = t->priv;
 
 	switch (packet_in->type) {
-	case SR_DF_ANALOG_OLD:
-		analog_old = packet_in->payload;
-		fdata = (float *)analog_old->data;
-		num_channels = g_slist_length(analog_old->channels);
-		factor = (float) ctx->factor.p / ctx->factor.q;
-		for (i = 0; i < analog_old->num_samples; i++) {
-			/* For now scale all values in all channels. */
-			for (l = analog_old->channels, c = 0; l; l = l->next, c++) {
-				ch = l->data;
-				(void)ch;
-				fdata[i * num_channels + c] *= factor;
-			}
-		}
-		break;
 	case SR_DF_ANALOG:
 		analog = packet_in->payload;
 		analog->encoding->scale.p *= ctx->factor.p;

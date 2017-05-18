@@ -26,8 +26,6 @@
 #include <config.h>
 #include "protocol.h"
 
-SR_PRIV struct sr_dev_driver asix_sigma_driver_info;
-
 /*
  * Channel numbers seem to go from 1-16, according to this image:
  * http://tools.asix.net/img/sigma_sigmacab_pins_720.jpg
@@ -44,7 +42,7 @@ static const uint32_t drvopts[] = {
 
 static const uint32_t devopts[] = {
 	SR_CONF_LIMIT_MSEC | SR_CONF_GET | SR_CONF_SET,
-	SR_CONF_LIMIT_SAMPLES | SR_CONF_SET,
+	SR_CONF_LIMIT_SAMPLES | SR_CONF_GET | SR_CONF_SET,
 	SR_CONF_SAMPLERATE | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
 	SR_CONF_TRIGGER_MATCH | SR_CONF_LIST,
 	SR_CONF_CAPTURE_RATIO | SR_CONF_GET | SR_CONF_SET,
@@ -63,17 +61,10 @@ static int dev_clear(const struct sr_dev_driver *di)
 	return std_dev_clear(di, sigma_clear_helper);
 }
 
-static int init(struct sr_dev_driver *di, struct sr_context *sr_ctx)
-{
-	return std_init(sr_ctx, di, LOG_PREFIX);
-}
-
 static GSList *scan(struct sr_dev_driver *di, GSList *options)
 {
 	struct sr_dev_inst *sdi;
-	struct drv_context *drvc;
 	struct dev_context *devc;
-	GSList *devices;
 	struct ftdi_device_list *devlist;
 	char serial_txt[10];
 	uint32_t serial;
@@ -81,10 +72,6 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 	unsigned int i;
 
 	(void)options;
-
-	drvc = di->context;
-
-	devices = NULL;
 
 	devc = g_malloc0(sizeof(struct dev_context));
 
@@ -115,6 +102,7 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 	devc->cur_samplerate = samplerates[0];
 	devc->period_ps = 0;
 	devc->limit_msec = 0;
+	devc->limit_samples = 0;
 	devc->cur_firmware = -1;
 	devc->num_channels = 0;
 	devc->samples_per_event = 0;
@@ -126,29 +114,21 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 	sdi->status = SR_ST_INITIALIZING;
 	sdi->vendor = g_strdup(USB_VENDOR_NAME);
 	sdi->model = g_strdup(USB_MODEL_NAME);
-	sdi->driver = di;
 
 	for (i = 0; i < ARRAY_SIZE(channel_names); i++)
 		sr_channel_new(sdi, i, SR_CHANNEL_LOGIC, TRUE, channel_names[i]);
 
-	devices = g_slist_append(devices, sdi);
-	drvc->instances = g_slist_append(drvc->instances, sdi);
 	sdi->priv = devc;
 
 	/* We will open the device again when we need it. */
 	ftdi_list_free(&devlist);
 
-	return devices;
+	return std_scan_complete(di, g_slist_append(NULL, sdi));
 
 free:
 	ftdi_deinit(&devc->ftdic);
 	g_free(devc);
 	return NULL;
-}
-
-static GSList *dev_list(const struct sr_dev_driver *di)
-{
-	return ((struct drv_context *)(di->context))->instances;
 }
 
 static int dev_open(struct sr_dev_inst *sdi)
@@ -188,11 +168,6 @@ static int dev_close(struct sr_dev_inst *sdi)
 	return SR_OK;
 }
 
-static int cleanup(const struct sr_dev_driver *di)
-{
-	return dev_clear(di);
-}
-
 static int config_get(uint32_t key, GVariant **data, const struct sr_dev_inst *sdi,
 		const struct sr_channel_group *cg)
 {
@@ -210,6 +185,9 @@ static int config_get(uint32_t key, GVariant **data, const struct sr_dev_inst *s
 		break;
 	case SR_CONF_LIMIT_MSEC:
 		*data = g_variant_new_uint64(devc->limit_msec);
+		break;
+	case SR_CONF_LIMIT_SAMPLES:
+		*data = g_variant_new_uint64(devc->limit_samples);
 		break;
 	case SR_CONF_CAPTURE_RATIO:
 		*data = g_variant_new_uint64(devc->capture_ratio);
@@ -249,6 +227,7 @@ static int config_set(uint32_t key, GVariant *data, const struct sr_dev_inst *sd
 		break;
 	case SR_CONF_LIMIT_SAMPLES:
 		tmp = g_variant_get_uint64(data);
+		devc->limit_samples = tmp;
 		devc->limit_msec = tmp * 1000 / devc->cur_samplerate;
 		break;
 	case SR_CONF_CAPTURE_RATIO:
@@ -285,7 +264,7 @@ static int config_list(uint32_t key, GVariant **data, const struct sr_dev_inst *
 	case SR_CONF_SAMPLERATE:
 		g_variant_builder_init(&gvb, G_VARIANT_TYPE("a{sv}"));
 		gvar = g_variant_new_fixed_array(G_VARIANT_TYPE("t"), samplerates,
-				SAMPLERATES_COUNT, sizeof(uint64_t));
+				samplerates_count, sizeof(samplerates[0]));
 		g_variant_builder_add(&gvb, "{sv}", "samplerates", gvar);
 		*data = g_variant_builder_end(&gvb);
 		break;
@@ -301,7 +280,7 @@ static int config_list(uint32_t key, GVariant **data, const struct sr_dev_inst *
 	return SR_OK;
 }
 
-static int dev_acquisition_start(const struct sr_dev_inst *sdi, void *cb_data)
+static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 {
 	struct dev_context *devc;
 	struct clockselect_50 clockselect;
@@ -398,10 +377,7 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi, void *cb_data)
 	gettimeofday(&devc->start_tv, 0);
 	sigma_set_register(WRITE_MODE, 0x0d, devc);
 
-	devc->cb_data = cb_data;
-
-	/* Send header packet to the session bus. */
-	std_session_send_df_header(sdi, LOG_PREFIX);
+	std_session_send_df_header(sdi);
 
 	/* Add capture source. */
 	sr_session_source_add(sdi->session, -1, 0, 10, sigma_receive_data, (void *)sdi);
@@ -411,11 +387,9 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi, void *cb_data)
 	return SR_OK;
 }
 
-static int dev_acquisition_stop(struct sr_dev_inst *sdi, void *cb_data)
+static int dev_acquisition_stop(struct sr_dev_inst *sdi)
 {
 	struct dev_context *devc;
-
-	(void)cb_data;
 
 	devc = sdi->priv;
 	devc->state.state = SIGMA_IDLE;
@@ -425,14 +399,14 @@ static int dev_acquisition_stop(struct sr_dev_inst *sdi, void *cb_data)
 	return SR_OK;
 }
 
-SR_PRIV struct sr_dev_driver asix_sigma_driver_info = {
+static struct sr_dev_driver asix_sigma_driver_info = {
 	.name = "asix-sigma",
 	.longname = "ASIX SIGMA/SIGMA2",
 	.api_version = 1,
-	.init = init,
-	.cleanup = cleanup,
+	.init = std_init,
+	.cleanup = std_cleanup,
 	.scan = scan,
-	.dev_list = dev_list,
+	.dev_list = std_dev_list,
 	.dev_clear = dev_clear,
 	.config_get = config_get,
 	.config_set = config_set,
@@ -443,3 +417,4 @@ SR_PRIV struct sr_dev_driver asix_sigma_driver_info = {
 	.dev_acquisition_stop = dev_acquisition_stop,
 	.context = NULL,
 };
+SR_REGISTER_DEV_DRIVER(asix_sigma_driver_info);

@@ -29,7 +29,10 @@
 #define LOG_PREFIX "hameg-hmo"
 
 #define MAX_INSTRUMENT_VERSIONS 10
-#define MAX_COMMAND_SIZE 31
+#define MAX_COMMAND_SIZE 48
+#define MAX_ANALOG_CHANNEL_COUNT 4
+#define MAX_DIGITAL_CHANNEL_COUNT 16
+#define MAX_DIGITAL_GROUP_COUNT	2
 
 struct scope_config {
 	const char *name[MAX_INSTRUMENT_VERSIONS];
@@ -73,6 +76,7 @@ struct analog_channel_state {
 	float vertical_offset;
 
 	gboolean state;
+	char probe_unit;
 };
 
 struct scope_state {
@@ -101,6 +105,9 @@ struct dev_context {
 	uint64_t num_frames;
 
 	uint64_t frame_limit;
+
+	size_t pod_count;
+	GByteArray *logic_data;
 };
 
 SR_PRIV int hmo_init_device(struct sr_dev_inst *sdi);

@@ -66,8 +66,8 @@ static int scpi_tcp_dev_inst_new(void *priv, struct drv_context *drvc,
 	}
 
 	tcp->address = g_strdup(params[1]);
-	tcp->port    = g_strdup(params[2]);
-	tcp->socket  = -1;
+	tcp->port = g_strdup(params[2]);
+	tcp->socket = -1;
 
 	return SR_OK;
 }
@@ -135,12 +135,9 @@ static int scpi_tcp_send(void *priv, const char *command)
 {
 	struct scpi_tcp *tcp = priv;
 	int len, out;
-	char *terminated_command;
 
-	terminated_command = g_strdup_printf("%s\r\n", command);
-	len = strlen(terminated_command);
-	out = send(tcp->socket, terminated_command, len, 0);
-	g_free(terminated_command);
+	len = strlen(command);
+	out = send(tcp->socket, command, len, 0);
 
 	if (out < 0) {
 		sr_err("Send error: %s", g_strerror(errno));
@@ -184,6 +181,21 @@ static int scpi_tcp_raw_read_data(void *priv, char *buf, int maxlen)
 	tcp->response_bytes_read = len;
 
 	return len;
+}
+
+static int scpi_tcp_raw_write_data(void *priv, char *buf, int len)
+{
+	struct scpi_tcp *tcp = priv;
+	int sentlen;
+
+	sentlen = send(tcp->socket, buf, len, 0);
+
+	if (sentlen < 0) {
+		sr_err("Send error: %s.", g_strerror(errno));
+		return SR_ERR;
+	}
+
+	return sentlen;
 }
 
 static int scpi_tcp_rigol_read_data(void *priv, char *buf, int maxlen)
@@ -259,6 +271,7 @@ SR_PRIV const struct sr_scpi_dev_inst scpi_tcp_raw_dev = {
 	.send          = scpi_tcp_send,
 	.read_begin    = scpi_tcp_read_begin,
 	.read_data     = scpi_tcp_raw_read_data,
+	.write_data    = scpi_tcp_raw_write_data,
 	.read_complete = scpi_tcp_read_complete,
 	.close         = scpi_tcp_close,
 	.free          = scpi_tcp_free,

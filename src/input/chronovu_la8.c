@@ -14,8 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <config.h>
@@ -87,7 +86,7 @@ static int process_buffer(struct sr_input *in)
 
 	inc = in->priv;
 	if (!inc->started) {
-		std_session_send_df_header(in->sdi, LOG_PREFIX);
+		std_session_send_df_header(in->sdi);
 
 		if (inc->samplerate) {
 			packet.type = SR_DF_META;
@@ -140,7 +139,6 @@ static int receive(struct sr_input *in, GString *buf)
 static int end(struct sr_input *in)
 {
 	struct context *inc;
-	struct sr_datafeed_packet packet;
 	int ret;
 
 	if (in->sdi_ready)
@@ -149,12 +147,20 @@ static int end(struct sr_input *in)
 		ret = SR_OK;
 
 	inc = in->priv;
-	if (inc->started) {
-		packet.type = SR_DF_END;
-		sr_session_send(in->sdi, &packet);
-	}
+	if (inc->started)
+		std_session_send_df_end(in->sdi);
 
 	return ret;
+}
+
+static int reset(struct sr_input *in)
+{
+	struct context *inc = in->priv;
+
+	inc->started = FALSE;
+	g_string_truncate(in->buf, 0);
+
+	return SR_OK;
 }
 
 static struct sr_option options[] = {
@@ -184,4 +190,5 @@ SR_PRIV struct sr_input_module input_chronovu_la8 = {
 	.init = init,
 	.receive = receive,
 	.end = end,
+	.reset = reset,
 };

@@ -97,7 +97,7 @@ static int submit_request(const struct sr_dev_inst *sdi,
 	int ret;
 
 	devc = sdi->priv;
-	acq  = devc->acquisition;
+	acq = devc->acquisition;
 
 	devc->state = state;
 
@@ -132,7 +132,7 @@ static void handle_status_response(const struct sr_dev_inst *sdi)
 	unsigned int old_status;
 
 	devc = sdi->priv;
-	acq  = devc->acquisition;
+	acq = devc->acquisition;
 	old_status = acq->status;
 
 	if ((*devc->model->handle_response)(sdi) != SR_OK) {
@@ -168,7 +168,7 @@ static void handle_length_response(const struct sr_dev_inst *sdi)
 	struct acquisition_state *acq;
 
 	devc = sdi->priv;
-	acq  = devc->acquisition;
+	acq = devc->acquisition;
 
 	if ((*devc->model->handle_response)(sdi) != SR_OK) {
 		devc->transfer_error = TRUE;
@@ -202,13 +202,13 @@ static void handle_read_response(const struct sr_dev_inst *sdi)
 	unsigned int end_addr;
 
 	devc = sdi->priv;
-	acq  = devc->acquisition;
+	acq = devc->acquisition;
 
 	/* Prepare session packet. */
-	packet.type    = SR_DF_LOGIC;
+	packet.type = SR_DF_LOGIC;
 	packet.payload = &logic;
 	logic.unitsize = (devc->model->num_channels + 7) / 8;
-	logic.data     = acq->out_packet;
+	logic.data = acq->out_packet;
 
 	end_addr = MIN(acq->mem_addr_next, acq->mem_addr_stop);
 	acq->in_index = 0;
@@ -258,7 +258,7 @@ static void clear_acquisition_state(const struct sr_dev_inst *sdi)
 	struct acquisition_state *acq;
 
 	devc = sdi->priv;
-	acq  = devc->acquisition;
+	acq = devc->acquisition;
 
 	devc->acquisition = NULL;
 
@@ -277,12 +277,11 @@ static int transfer_event(int fd, int revents, void *cb_data)
 	struct dev_context *devc;
 	struct drv_context *drvc;
 	struct timeval tv;
-	struct sr_datafeed_packet packet;
 	int ret;
 
 	(void)fd;
 
-	sdi  = cb_data;
+	sdi = cb_data;
 	devc = sdi->priv;
 	drvc = sdi->driver->context;
 
@@ -290,7 +289,7 @@ static int transfer_event(int fd, int revents, void *cb_data)
 		return G_SOURCE_REMOVE;
 
 	/* Handle pending USB events without blocking. */
-	tv.tv_sec  = 0;
+	tv.tv_sec = 0;
 	tv.tv_usec = 0;
 	ret = libusb_handle_events_timeout_completed(drvc->sr_ctx->libusb_ctx,
 						     &tv, NULL);
@@ -317,10 +316,7 @@ static int transfer_event(int fd, int revents, void *cb_data)
 
 	/* We are done, clean up and send end packet to session bus. */
 	clear_acquisition_state(sdi);
-
-	packet.type = SR_DF_END;
-	packet.payload = NULL;
-	sr_session_send(sdi, &packet);
+	std_session_send_df_end(sdi);
 
 	return G_SOURCE_REMOVE;
 }
@@ -333,9 +329,9 @@ static void LIBUSB_CALL transfer_out_completed(struct libusb_transfer *transfer)
 	struct dev_context *devc;
 	struct acquisition_state *acq;
 
-	sdi  = transfer->user_data;
+	sdi = transfer->user_data;
 	devc = sdi->priv;
-	acq  = devc->acquisition;
+	acq = devc->acquisition;
 
 	if (transfer->status != LIBUSB_TRANSFER_COMPLETED) {
 		sr_err("Transfer to device failed (state %d): %s.",
@@ -398,9 +394,9 @@ static void LIBUSB_CALL transfer_in_completed(struct libusb_transfer *transfer)
 	struct dev_context *devc;
 	struct acquisition_state *acq;
 
-	sdi  = transfer->user_data;
+	sdi = transfer->user_data;
 	devc = sdi->priv;
-	acq  = devc->acquisition;
+	acq = devc->acquisition;
 
 	if (transfer->status != LIBUSB_TRANSFER_COMPLETED) {
 		sr_err("Transfer from device failed (state %d): %s.",
@@ -461,7 +457,7 @@ static int init_acquisition_state(const struct sr_dev_inst *sdi)
 	struct acquisition_state *acq;
 
 	devc = sdi->priv;
-	usb  = sdi->conn;
+	usb = sdi->conn;
 
 	if (devc->acquisition) {
 		sr_err("Acquisition still in progress?");
@@ -577,10 +573,9 @@ SR_PRIV int lwla_start_acquisition(const struct sr_dev_inst *sdi)
 	}
 	ret = submit_request(sdi, STATE_START_CAPTURE);
 
-	if (ret == SR_OK) {
-		/* Send header packet to the session bus. */
-		ret = std_session_send_df_header(sdi, LOG_PREFIX);
-	}
+	if (ret == SR_OK)
+		ret = std_session_send_df_header(sdi);
+
 	if (ret != SR_OK) {
 		usb_source_remove(sdi->session, drvc->sr_ctx);
 		clear_acquisition_state(sdi);

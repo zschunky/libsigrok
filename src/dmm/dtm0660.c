@@ -16,8 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 /*
@@ -129,7 +128,7 @@ static gboolean flags_valid(const struct dtm0660_info *info)
 	return TRUE;
 }
 
-static int parse_value(const uint8_t *buf, float *result)
+static int parse_value(const uint8_t *buf, float *result, int *exponent)
 {
 	int i, sign, intval = 0, digits[4];
 	uint8_t digit_bytes[4];
@@ -179,14 +178,18 @@ static int parse_value(const uint8_t *buf, float *result)
 	/* Decimal point position. */
 	if ((buf[3] & 0x01) != 0) {
 		floatval /= 1000;
+		*exponent = -3;
 		sr_spew("Decimal point after first digit.");
 	} else if ((buf[5] & 0x01) != 0) {
 		floatval /= 100;
+		*exponent = -2;
 		sr_spew("Decimal point after second digit.");
 	} else if ((buf[7] & 0x01) != 0) {
 		floatval /= 10;
+		*exponent = -1;
 		sr_spew("Decimal point after third digit.");
 	} else {
+		*exponent = 0;
 		sr_spew("No decimal point in the number.");
 	}
 
@@ -248,81 +251,82 @@ static void parse_flags(const uint8_t *buf, struct dtm0660_info *info)
 	info->is_max        = (buf[14] & (1 << 3)) != 0;
 }
 
-static void handle_flags(struct sr_datafeed_analog_old *analog, float *floatval,
-			 const struct dtm0660_info *info)
+static void handle_flags(struct sr_datafeed_analog *analog, float *floatval,
+			 int *exponent, const struct dtm0660_info *info)
 {
 	/* Factors */
 	if (info->is_nano)
-		*floatval /= 1000000000;
+		*exponent -= 9;
 	if (info->is_micro)
-		*floatval /= 1000000;
+		*exponent -= 6;
 	if (info->is_milli)
-		*floatval /= 1000;
+		*exponent -= 3;
 	if (info->is_kilo)
-		*floatval *= 1000;
+		*exponent += 3;
 	if (info->is_mega)
-		*floatval *= 1000000;
+		*exponent += 6;
+	*floatval *= powf(10, *exponent);
 
 	/* Measurement modes */
 	if (info->is_volt) {
-		analog->mq = SR_MQ_VOLTAGE;
-		analog->unit = SR_UNIT_VOLT;
+		analog->meaning->mq = SR_MQ_VOLTAGE;
+		analog->meaning->unit = SR_UNIT_VOLT;
 	}
 	if (info->is_ampere) {
-		analog->mq = SR_MQ_CURRENT;
-		analog->unit = SR_UNIT_AMPERE;
+		analog->meaning->mq = SR_MQ_CURRENT;
+		analog->meaning->unit = SR_UNIT_AMPERE;
 	}
 	if (info->is_ohm) {
-		analog->mq = SR_MQ_RESISTANCE;
-		analog->unit = SR_UNIT_OHM;
+		analog->meaning->mq = SR_MQ_RESISTANCE;
+		analog->meaning->unit = SR_UNIT_OHM;
 	}
 	if (info->is_hz) {
-		analog->mq = SR_MQ_FREQUENCY;
-		analog->unit = SR_UNIT_HERTZ;
+		analog->meaning->mq = SR_MQ_FREQUENCY;
+		analog->meaning->unit = SR_UNIT_HERTZ;
 	}
 	if (info->is_farad) {
-		analog->mq = SR_MQ_CAPACITANCE;
-		analog->unit = SR_UNIT_FARAD;
+		analog->meaning->mq = SR_MQ_CAPACITANCE;
+		analog->meaning->unit = SR_UNIT_FARAD;
 	}
 	if (info->is_beep) {
-		analog->mq = SR_MQ_CONTINUITY;
-		analog->unit = SR_UNIT_BOOLEAN;
+		analog->meaning->mq = SR_MQ_CONTINUITY;
+		analog->meaning->unit = SR_UNIT_BOOLEAN;
 		*floatval = (*floatval == INFINITY) ? 0.0 : 1.0;
 	}
 	if (info->is_diode) {
-		analog->mq = SR_MQ_VOLTAGE;
-		analog->unit = SR_UNIT_VOLT;
+		analog->meaning->mq = SR_MQ_VOLTAGE;
+		analog->meaning->unit = SR_UNIT_VOLT;
 	}
 	if (info->is_percent) {
-		analog->mq = SR_MQ_DUTY_CYCLE;
-		analog->unit = SR_UNIT_PERCENTAGE;
+		analog->meaning->mq = SR_MQ_DUTY_CYCLE;
+		analog->meaning->unit = SR_UNIT_PERCENTAGE;
 	}
 	if (info->is_degc) {
-		analog->mq = SR_MQ_TEMPERATURE;
-		analog->unit = SR_UNIT_CELSIUS;
+		analog->meaning->mq = SR_MQ_TEMPERATURE;
+		analog->meaning->unit = SR_UNIT_CELSIUS;
 	}
 	if (info->is_degf) {
-		analog->mq = SR_MQ_TEMPERATURE;
-		analog->unit = SR_UNIT_FAHRENHEIT;
+		analog->meaning->mq = SR_MQ_TEMPERATURE;
+		analog->meaning->unit = SR_UNIT_FAHRENHEIT;
 	}
 
 	/* Measurement related flags */
 	if (info->is_ac)
-		analog->mqflags |= SR_MQFLAG_AC;
+		analog->meaning->mqflags |= SR_MQFLAG_AC;
 	if (info->is_dc)
-		analog->mqflags |= SR_MQFLAG_DC;
+		analog->meaning->mqflags |= SR_MQFLAG_DC;
 	if (info->is_auto)
-		analog->mqflags |= SR_MQFLAG_AUTORANGE;
+		analog->meaning->mqflags |= SR_MQFLAG_AUTORANGE;
 	if (info->is_diode)
-		analog->mqflags |= SR_MQFLAG_DIODE;
+		analog->meaning->mqflags |= SR_MQFLAG_DIODE;
 	if (info->is_hold)
-		analog->mqflags |= SR_MQFLAG_HOLD;
+		analog->meaning->mqflags |= SR_MQFLAG_HOLD;
 	if (info->is_rel)
-		analog->mqflags |= SR_MQFLAG_RELATIVE;
+		analog->meaning->mqflags |= SR_MQFLAG_RELATIVE;
 	if (info->is_min)
-		analog->mqflags |= SR_MQFLAG_MIN;
+		analog->meaning->mqflags |= SR_MQFLAG_MIN;
 	if (info->is_max)
-		analog->mqflags |= SR_MQFLAG_MAX;
+		analog->meaning->mqflags |= SR_MQFLAG_MAX;
 
 	/* Other flags */
 	if (info->is_rs232)
@@ -354,7 +358,7 @@ SR_PRIV gboolean sr_dtm0660_packet_valid(const uint8_t *buf)
  * @param buf Buffer containing the 15-byte protocol packet. Must not be NULL.
  * @param floatval Pointer to a float variable. That variable will contain the
  *                 result value upon parsing success. Must not be NULL.
- * @param analog Pointer to a struct sr_datafeed_analog_old. The struct will be
+ * @param analog Pointer to a struct sr_datafeed_analog. The struct will be
  *               filled with data according to the protocol packet.
  *               Must not be NULL.
  * @param info Pointer to a struct dtm0660_info. The struct will be filled
@@ -364,20 +368,23 @@ SR_PRIV gboolean sr_dtm0660_packet_valid(const uint8_t *buf)
  *         'analog' variable contents are undefined and should not be used.
  */
 SR_PRIV int sr_dtm0660_parse(const uint8_t *buf, float *floatval,
-			     struct sr_datafeed_analog_old *analog, void *info)
+			     struct sr_datafeed_analog *analog, void *info)
 {
-	int ret;
+	int ret, exponent = 0;
 	struct dtm0660_info *info_local;
 
 	info_local = (struct dtm0660_info *)info;
 
-	if ((ret = parse_value(buf, floatval)) != SR_OK) {
+	if ((ret = parse_value(buf, floatval, &exponent)) != SR_OK) {
 		sr_dbg("Error parsing value: %d.", ret);
 		return ret;
 	}
 
 	parse_flags(buf, info_local);
-	handle_flags(analog, floatval, info_local);
+	handle_flags(analog, floatval, &exponent, info_local);
+
+	analog->encoding->digits = -exponent;
+	analog->spec->spec_digits = -exponent;
 
 	return SR_OK;
 }

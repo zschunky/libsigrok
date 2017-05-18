@@ -14,8 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 /*
@@ -86,7 +85,7 @@ static gboolean flags_valid(const struct fs9922_info *info)
 	return TRUE;
 }
 
-static int parse_value(const uint8_t *buf, float *result)
+static int parse_value(const uint8_t *buf, float *result, int *exponent)
 {
 	int sign, intval;
 	float floatval;
@@ -140,13 +139,13 @@ static int parse_value(const uint8_t *buf, float *result)
 		return SR_ERR;
 	}
 	if (buf[6] == '0')
-		floatval /= 1;
+		*exponent = 0;
 	else if (buf[6] == '1')
-		floatval /= 1000;
+		*exponent = -3;
 	else if (buf[6] == '2')
-		floatval /= 100;
+		*exponent = -2;
 	else if (buf[6] == '4')
-		floatval /= 10;
+		*exponent = -1;
 
 	/* Apply sign. */
 	floatval *= sign;
@@ -223,82 +222,83 @@ static void parse_flags(const uint8_t *buf, struct fs9922_info *info)
 	/* Byte 13: Always '\n' (newline, 0x0a, 10) */
 }
 
-static void handle_flags(struct sr_datafeed_analog_old *analog, float *floatval,
-			 const struct fs9922_info *info)
+static void handle_flags(struct sr_datafeed_analog *analog, float *floatval,
+			 int *exponent, const struct fs9922_info *info)
 {
 	/* Factors */
 	if (info->is_nano)
-		*floatval /= 1000000000;
+		*exponent -= 9;
 	if (info->is_micro)
-		*floatval /= 1000000;
+		*exponent -= 6;
 	if (info->is_milli)
-		*floatval /= 1000;
+		*exponent -= 3;
 	if (info->is_kilo)
-		*floatval *= 1000;
+		*exponent += 3;
 	if (info->is_mega)
-		*floatval *= 1000000;
+		*exponent += 6;
+	*floatval *= powf(10, *exponent);
 
 	/* Measurement modes */
 	if (info->is_volt || info->is_diode) {
 		/* Note: In "diode mode" both is_diode and is_volt are set. */
-		analog->mq = SR_MQ_VOLTAGE;
-		analog->unit = SR_UNIT_VOLT;
+		analog->meaning->mq = SR_MQ_VOLTAGE;
+		analog->meaning->unit = SR_UNIT_VOLT;
 	}
 	if (info->is_ampere) {
-		analog->mq = SR_MQ_CURRENT;
-		analog->unit = SR_UNIT_AMPERE;
+		analog->meaning->mq = SR_MQ_CURRENT;
+		analog->meaning->unit = SR_UNIT_AMPERE;
 	}
 	if (info->is_ohm) {
-		analog->mq = SR_MQ_RESISTANCE;
-		analog->unit = SR_UNIT_OHM;
+		analog->meaning->mq = SR_MQ_RESISTANCE;
+		analog->meaning->unit = SR_UNIT_OHM;
 	}
 	if (info->is_hfe) {
-		analog->mq = SR_MQ_GAIN;
-		analog->unit = SR_UNIT_UNITLESS;
+		analog->meaning->mq = SR_MQ_GAIN;
+		analog->meaning->unit = SR_UNIT_UNITLESS;
 	}
 	if (info->is_hertz) {
-		analog->mq = SR_MQ_FREQUENCY;
-		analog->unit = SR_UNIT_HERTZ;
+		analog->meaning->mq = SR_MQ_FREQUENCY;
+		analog->meaning->unit = SR_UNIT_HERTZ;
 	}
 	if (info->is_farad) {
-		analog->mq = SR_MQ_CAPACITANCE;
-		analog->unit = SR_UNIT_FARAD;
+		analog->meaning->mq = SR_MQ_CAPACITANCE;
+		analog->meaning->unit = SR_UNIT_FARAD;
 	}
 	if (info->is_celsius) {
-		analog->mq = SR_MQ_TEMPERATURE;
-		analog->unit = SR_UNIT_CELSIUS;
+		analog->meaning->mq = SR_MQ_TEMPERATURE;
+		analog->meaning->unit = SR_UNIT_CELSIUS;
 	}
 	if (info->is_fahrenheit) {
-		analog->mq = SR_MQ_TEMPERATURE;
-		analog->unit = SR_UNIT_FAHRENHEIT;
+		analog->meaning->mq = SR_MQ_TEMPERATURE;
+		analog->meaning->unit = SR_UNIT_FAHRENHEIT;
 	}
 	if (info->is_beep) {
-		analog->mq = SR_MQ_CONTINUITY;
-		analog->unit = SR_UNIT_BOOLEAN;
+		analog->meaning->mq = SR_MQ_CONTINUITY;
+		analog->meaning->unit = SR_UNIT_BOOLEAN;
 		*floatval = (*floatval == INFINITY) ? 0.0 : 1.0;
 	}
 	if (info->is_percent) {
-		analog->mq = SR_MQ_DUTY_CYCLE;
-		analog->unit = SR_UNIT_PERCENTAGE;
+		analog->meaning->mq = SR_MQ_DUTY_CYCLE;
+		analog->meaning->unit = SR_UNIT_PERCENTAGE;
 	}
 
 	/* Measurement related flags */
 	if (info->is_ac)
-		analog->mqflags |= SR_MQFLAG_AC;
+		analog->meaning->mqflags |= SR_MQFLAG_AC;
 	if (info->is_dc)
-		analog->mqflags |= SR_MQFLAG_DC;
+		analog->meaning->mqflags |= SR_MQFLAG_DC;
 	if (info->is_auto)
-		analog->mqflags |= SR_MQFLAG_AUTORANGE;
+		analog->meaning->mqflags |= SR_MQFLAG_AUTORANGE;
 	if (info->is_diode)
-		analog->mqflags |= SR_MQFLAG_DIODE;
+		analog->meaning->mqflags |= SR_MQFLAG_DIODE;
 	if (info->is_hold)
-		analog->mqflags |= SR_MQFLAG_HOLD;
+		analog->meaning->mqflags |= SR_MQFLAG_HOLD;
 	if (info->is_max)
-		analog->mqflags |= SR_MQFLAG_MAX;
+		analog->meaning->mqflags |= SR_MQFLAG_MAX;
 	if (info->is_min)
-		analog->mqflags |= SR_MQFLAG_MIN;
+		analog->meaning->mqflags |= SR_MQFLAG_MIN;
 	if (info->is_rel)
-		analog->mqflags |= SR_MQFLAG_RELATIVE;
+		analog->meaning->mqflags |= SR_MQFLAG_RELATIVE;
 
 	/* Other flags */
 	if (info->is_apo)
@@ -344,7 +344,7 @@ SR_PRIV gboolean sr_fs9922_packet_valid(const uint8_t *buf)
  * @param buf Buffer containing the protocol packet. Must not be NULL.
  * @param floatval Pointer to a float variable. That variable will contain the
  *                 result value upon parsing success. Must not be NULL.
- * @param analog Pointer to a struct sr_datafeed_analog_old. The struct will be
+ * @param analog Pointer to a struct sr_datafeed_analog. The struct will be
  *               filled with data according to the protocol packet.
  *               Must not be NULL.
  * @param info Pointer to a struct fs9922_info. The struct will be filled
@@ -354,25 +354,28 @@ SR_PRIV gboolean sr_fs9922_packet_valid(const uint8_t *buf)
  *         'analog' variable contents are undefined and should not be used.
  */
 SR_PRIV int sr_fs9922_parse(const uint8_t *buf, float *floatval,
-			    struct sr_datafeed_analog_old *analog, void *info)
+			    struct sr_datafeed_analog *analog, void *info)
 {
-	int ret;
+	int ret, exponent = 0;
 	struct fs9922_info *info_local;
 
 	info_local = (struct fs9922_info *)info;
 
-	if ((ret = parse_value(buf, floatval)) != SR_OK) {
+	if ((ret = parse_value(buf, floatval, &exponent)) != SR_OK) {
 		sr_dbg("Error parsing value: %d.", ret);
 		return ret;
 	}
 
 	parse_flags(buf, info_local);
-	handle_flags(analog, floatval, info_local);
+	handle_flags(analog, floatval, &exponent, info_local);
+
+	analog->encoding->digits = -exponent;
+	analog->spec->spec_digits = -exponent;
 
 	return SR_OK;
 }
 
-SR_PRIV void sr_fs9922_z1_diode(struct sr_datafeed_analog_old *analog, void *info)
+SR_PRIV void sr_fs9922_z1_diode(struct sr_datafeed_analog *analog, void *info)
 {
 	struct fs9922_info *info_local;
 
@@ -380,8 +383,8 @@ SR_PRIV void sr_fs9922_z1_diode(struct sr_datafeed_analog_old *analog, void *inf
 
 	/* User-defined z1 flag means "diode mode". */
 	if (info_local->is_z1) {
-		analog->mq = SR_MQ_VOLTAGE;
-		analog->unit = SR_UNIT_VOLT;
-		analog->mqflags |= SR_MQFLAG_DIODE;
+		analog->meaning->mq = SR_MQ_VOLTAGE;
+		analog->meaning->unit = SR_UNIT_VOLT;
+		analog->meaning->mqflags |= SR_MQFLAG_DIODE;
 	}
 }

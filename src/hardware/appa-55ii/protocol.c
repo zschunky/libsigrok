@@ -23,11 +23,11 @@
 #include "protocol.h"
 
 typedef enum {
-    LIVE_DATA    = 0x00,
-    LOG_METADATA = 0x11,
-    LOG_DATA     = 0x14,
-    LOG_START    = 0x18,
-    LOG_END      = 0x19,
+	LIVE_DATA    = 0x00,
+	LOG_METADATA = 0x11,
+	LOG_DATA     = 0x14,
+	LOG_START    = 0x18,
+	LOG_END      = 0x19,
 } packet_type;
 
 static gboolean appa_55ii_checksum(const uint8_t *buf)
@@ -70,7 +70,7 @@ static uint64_t appa_55ii_flags(const uint8_t *buf)
 	return flags;
 }
 
-static float appa_55ii_temp(const uint8_t *buf, int ch)
+static float appa_55ii_temp(const uint8_t *buf, int ch, int *digits)
 {
 	const uint8_t *ptr;
 	int16_t temp;
@@ -79,12 +79,14 @@ static float appa_55ii_temp(const uint8_t *buf, int ch)
 	ptr = buf + 4 + 14 + 3 * ch;
 	temp = RL16(ptr);
 	flags = ptr[2];
+	*digits = 0;
 
 	if (flags & 0x60)
 		return INFINITY;
-	else if (flags & 1)
+	else if (flags & 1) {
+		*digits = 1;
 		return (float)temp / 10;
-	else
+	} else
 		return (float)temp;
 }
 
@@ -92,38 +94,41 @@ static void appa_55ii_live_data(struct sr_dev_inst *sdi, const uint8_t *buf)
 {
 	struct dev_context *devc;
 	struct sr_datafeed_packet packet;
-	struct sr_datafeed_analog_old analog;
+	struct sr_datafeed_analog analog;
+	struct sr_analog_encoding encoding;
+	struct sr_analog_meaning meaning;
+	struct sr_analog_spec spec;
 	struct sr_channel *ch;
-	float values[APPA_55II_NUM_CHANNELS], *val_ptr;
-	int i;
+	float value;
+	int i, digits;
 
 	devc = sdi->priv;
 
 	if (devc->data_source != DATA_SOURCE_LIVE)
 		return;
 
-	val_ptr = values;
-	memset(&analog, 0, sizeof(struct sr_datafeed_analog_old));
-	analog.num_samples = 1;
-	analog.mq = SR_MQ_TEMPERATURE;
-	analog.unit = SR_UNIT_CELSIUS;
-	analog.mqflags = appa_55ii_flags(buf);
-	analog.data = values;
-
 	for (i = 0; i < APPA_55II_NUM_CHANNELS; i++) {
 		ch = g_slist_nth_data(sdi->channels, i);
 		if (!ch->enabled)
 			continue;
-		analog.channels = g_slist_append(analog.channels, ch);
-		*val_ptr++ = appa_55ii_temp(buf, i);
+
+		value = appa_55ii_temp(buf, i, &digits);
+
+		sr_analog_init(&analog, &encoding, &meaning, &spec, digits);
+		analog.num_samples = 1;
+		analog.data = &value;
+		analog.meaning->mq = SR_MQ_TEMPERATURE;
+		analog.meaning->unit = SR_UNIT_CELSIUS;
+		analog.meaning->mqflags = appa_55ii_flags(buf);
+		analog.meaning->channels = g_slist_append(NULL, ch);
+
+		packet.type = SR_DF_ANALOG;
+		packet.payload = &analog;
+		sr_session_send(sdi, &packet);
+		g_slist_free(analog.meaning->channels);
 	}
 
-	packet.type = SR_DF_ANALOG_OLD;
-	packet.payload = &analog;
-	sr_session_send(devc->session_cb_data, &packet);
-	g_slist_free(analog.channels);
-
-	devc->num_samples++;
+	sr_sw_limits_update_samples_read(&devc->limits, 1);
 }
 
 static void appa_55ii_log_metadata(struct sr_dev_inst *sdi, const uint8_t *buf)
@@ -138,7 +143,10 @@ static void appa_55ii_log_data_parse(struct sr_dev_inst *sdi)
 {
 	struct dev_context *devc;
 	struct sr_datafeed_packet packet;
-	struct sr_datafeed_analog_old analog;
+	struct sr_datafeed_analog analog;
+	struct sr_analog_encoding encoding;
+	struct sr_analog_meaning meaning;
+	struct sr_analog_spec spec;
 	struct sr_channel *ch;
 	float values[APPA_55II_NUM_CHANNELS], *val_ptr;
 	const uint8_t *buf;
@@ -155,10 +163,10 @@ static void appa_55ii_log_data_parse(struct sr_dev_inst *sdi)
 		/* FIXME: Timestamp should be sent in the packet. */
 		sr_dbg("Timestamp: %02d:%02d:%02d", buf[2], buf[3], buf[4]);
 
-		memset(&analog, 0, sizeof(struct sr_datafeed_analog_old));
+		sr_analog_init(&analog, &encoding, &meaning, &spec, 1);
 		analog.num_samples = 1;
-		analog.mq = SR_MQ_TEMPERATURE;
-		analog.unit = SR_UNIT_CELSIUS;
+		analog.meaning->mq = SR_MQ_TEMPERATURE;
+		analog.meaning->unit = SR_UNIT_CELSIUS;
 		analog.data = values;
 
 		for (i = 0; i < APPA_55II_NUM_CHANNELS; i++) {
@@ -166,16 +174,16 @@ static void appa_55ii_log_data_parse(struct sr_dev_inst *sdi)
 			ch = g_slist_nth_data(sdi->channels, i);
 			if (!ch->enabled)
 				continue;
-			analog.channels = g_slist_append(analog.channels, ch);
+			analog.meaning->channels = g_slist_append(analog.meaning->channels, ch);
 			*val_ptr++ = temp == 0x7FFF ? INFINITY : (float)temp / 10;
 		}
 
-		packet.type = SR_DF_ANALOG_OLD;
+		packet.type = SR_DF_ANALOG;
 		packet.payload = &analog;
-		sr_session_send(devc->session_cb_data, &packet);
-		g_slist_free(analog.channels);
+		sr_session_send(sdi, &packet);
+		g_slist_free(analog.meaning->channels);
 
-		devc->num_samples++;
+		sr_sw_limits_update_samples_read(&devc->limits, 1);
 		devc->log_buf_len -= 20;
 		offset += 20;
 		devc->num_log_records--;
@@ -216,7 +224,7 @@ static void appa_55ii_log_end(struct sr_dev_inst *sdi)
 	if (devc->data_source != DATA_SOURCE_MEMORY)
 		return;
 
-	sdi->driver->dev_acquisition_stop(sdi, devc->session_cb_data);
+	sdi->driver->dev_acquisition_stop(sdi);
 }
 
 static const uint8_t *appa_55ii_parse_data(struct sr_dev_inst *sdi,
@@ -266,7 +274,6 @@ SR_PRIV int appa_55ii_receive_data(int fd, int revents, void *cb_data)
 	struct sr_dev_inst *sdi;
 	struct dev_context *devc;
 	struct sr_serial_dev_inst *serial;
-	int64_t time;
 	const uint8_t *ptr, *next_ptr, *end_ptr;
 	int len;
 
@@ -301,20 +308,9 @@ SR_PRIV int appa_55ii_receive_data(int fd, int revents, void *cb_data)
 		return FALSE;
 	}
 
-	if (devc->limit_samples && devc->num_samples >= devc->limit_samples) {
-		sr_info("Requested number of samples reached.");
-		sdi->driver->dev_acquisition_stop(sdi, devc->session_cb_data);
+	if (sr_sw_limits_check(&devc->limits)) {
+		sdi->driver->dev_acquisition_stop(sdi);
 		return TRUE;
-	}
-
-	if (devc->limit_msec) {
-		time = (g_get_monotonic_time() - devc->start_time) / 1000;
-		if (time > (int64_t)devc->limit_msec) {
-			sr_info("Requested time limit reached.");
-			sdi->driver->dev_acquisition_stop(sdi,
-					devc->session_cb_data);
-			return TRUE;
-		}
 	}
 
 	return TRUE;

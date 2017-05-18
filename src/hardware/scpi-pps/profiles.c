@@ -25,13 +25,13 @@
 #include "protocol.h"
 
 #define CH_IDX(x) (1 << x)
-#define FREQ_DC_ONLY {0, 0, 0}
+#define FREQ_DC_ONLY {0, 0, 0, 0, 0}
 
 static const uint32_t devopts_none[] = { };
 
 /* Agilent/Keysight N5700A series */
 static const uint32_t agilent_n5700a_devopts[] = {
-	SR_CONF_CONTINUOUS | SR_CONF_SET,
+	SR_CONF_CONTINUOUS,
 };
 
 static const uint32_t agilent_n5700a_devopts_cg[] = {
@@ -44,12 +44,16 @@ static const uint32_t agilent_n5700a_devopts_cg[] = {
 	SR_CONF_ENABLED | SR_CONF_GET | SR_CONF_SET,
 };
 
-static const struct channel_spec agilent_n5767a_ch[] = {
-	{ "1", { 0, 60, 0.0001 }, { 0, 25, 0.1 }, FREQ_DC_ONLY },
+static const struct channel_group_spec agilent_n5700a_cg[] = {
+	{ "1", CH_IDX(0), PPS_OVP | PPS_OCP },
 };
 
-static const struct channel_group_spec agilent_n5767a_cg[] = {
-	{ "1", CH_IDX(0), PPS_OVP | PPS_OCP },
+static const struct channel_spec agilent_n5767a_ch[] = {
+	{ "1", { 0, 60, 0.0072, 3, 4 }, { 0, 25, 0.003, 3, 4 }, { 0, 1500 }, FREQ_DC_ONLY },
+};
+
+static const struct channel_spec agilent_n5763a_ch[] = {
+	{ "1", { 0, 12.5, 0.0015, 3, 4 }, { 0, 120, 0.0144, 3, 4 }, { 0, 1500 }, FREQ_DC_ONLY },
 };
 
 /*
@@ -81,7 +85,7 @@ static const struct scpi_command agilent_n5700a_cmd[] = {
 
 /* Chroma 61600 series AC source */
 static const uint32_t chroma_61604_devopts[] = {
-	SR_CONF_CONTINUOUS | SR_CONF_SET,
+	SR_CONF_CONTINUOUS,
 };
 
 static const uint32_t chroma_61604_devopts_cg[] = {
@@ -96,7 +100,7 @@ static const uint32_t chroma_61604_devopts_cg[] = {
 };
 
 static const struct channel_spec chroma_61604_ch[] = {
-	{ "1", { 0, 300, 0.1 }, { 0, 16, 0.1 }, { 1.0, 1000.0, 0.01 } },
+	{ "1", { 0, 300, 0.1, 1, 1 }, { 0, 16, 0.1, 2, 2 }, { 0, 2000, 0, 1, 1 }, { 1.0, 1000.0, 0.01 } },
 };
 
 static const struct channel_group_spec chroma_61604_cg[] = {
@@ -128,7 +132,7 @@ static const struct scpi_command chroma_61604_cmd[] = {
 /* Chroma 62000 series DC source */
 
 static const uint32_t chroma_62000_devopts[] = {
-	SR_CONF_CONTINUOUS | SR_CONF_SET,
+	SR_CONF_CONTINUOUS,
 };
 
 static const uint32_t chroma_62000_devopts_cg[] = {
@@ -174,30 +178,39 @@ static int chroma_62000p_probe_channels(struct sr_dev_inst *sdi,
 		struct channel_group_spec **channel_groups,
 		unsigned int *num_channel_groups)
 {
-	unsigned int volts, amps;
+	unsigned int volts, amps, watts;
 	struct channel_spec *channel;
 
 	(void)sdi;
 
-	sscanf(hw_info->model, "%*[^P]P-%u-%u", &volts, &amps);
-	sr_dbg("Found device rated for %d V and %d A", volts, amps);
+	sscanf(hw_info->model, "620%uP-%u-%u", &watts, &volts, &amps);
+	watts *= 100;
+	sr_dbg("Found device rated for %d V, %d A and %d W", volts, amps, watts);
 
 	if (volts > 600) {
 		sr_err("Probed max voltage of %u V is out of spec.", volts);
 		return SR_ERR_BUG;
 	}
 
-	if (volts > 120) {
+	if (amps > 120) {
 		sr_err("Probed max current of %u A is out of spec.", amps);
+		return SR_ERR_BUG;
+	}
+
+	if (watts > 5000) {
+		sr_err("Probed max power of %u W is out of spec.", watts);
 		return SR_ERR_BUG;
 	}
 
 	channel = g_malloc0(sizeof(struct channel_spec));
 	channel->name = "1";
-	channel->voltage[0] = channel->current[0] = 0.0;
+	channel->voltage[0] = channel->current[0] = channel->power[0] = 0.0;
 	channel->voltage[1] = (float)volts;
 	channel->current[1] = (float)amps;
+	channel->power[1]   = (float)watts;
 	channel->voltage[2] = channel->current[2] = 0.01;
+	channel->voltage[3] = channel->voltage[4] = 3;
+	channel->current[3] = channel->current[4] = 4;
 	*channels = channel;
 	*num_channels = 1;
 
@@ -210,7 +223,7 @@ static int chroma_62000p_probe_channels(struct sr_dev_inst *sdi,
 
 /* Rigol DP800 series */
 static const uint32_t rigol_dp800_devopts[] = {
-	SR_CONF_CONTINUOUS | SR_CONF_SET,
+	SR_CONF_CONTINUOUS,
 	SR_CONF_OVER_TEMPERATURE_PROTECTION | SR_CONF_GET | SR_CONF_SET,
 };
 
@@ -230,20 +243,20 @@ static const uint32_t rigol_dp800_devopts_cg[] = {
 };
 
 static const struct channel_spec rigol_dp821a_ch[] = {
-	{ "1", { 0, 60, 0.001 }, { 0, 1, 0.0001 }, FREQ_DC_ONLY },
-	{ "2", { 0, 8, 0.001 }, { 0, 10, 0.001 }, FREQ_DC_ONLY },
+	{ "1", { 0, 60, 0.001, 3, 3 }, { 0, 1, 0.0001, 4, 4 }, { 0, 60, 0, 3, 4 }, FREQ_DC_ONLY },
+	{ "2", { 0,  8, 0.001, 3, 3 }, { 0, 10, 0.001, 3, 3 }, { 0, 80, 0, 3, 3 }, FREQ_DC_ONLY },
 };
 
 static const struct channel_spec rigol_dp831_ch[] = {
-	{ "1", { 0, 8, 0.001 }, { 0, 5, 0.0003 }, FREQ_DC_ONLY },
-	{ "2", { 0, 30, 0.001 }, { 0, 2, 0.0001 }, FREQ_DC_ONLY },
-	{ "3", { 0, -30, 0.001 }, { 0, 2, 0.0001 }, FREQ_DC_ONLY },
+	{ "1", { 0,   8, 0.001, 3, 4 }, { 0, 5, 0.0003, 3, 4 }, { 0, 40, 0, 3, 4 }, FREQ_DC_ONLY },
+	{ "2", { 0,  30, 0.001, 3, 4 }, { 0, 2, 0.0001, 3, 4 }, { 0, 60, 0, 3, 4 }, FREQ_DC_ONLY },
+	{ "3", { 0, -30, 0.001, 3, 4 }, { 0, 2, 0.0001, 3, 4 }, { 0, 60, 0, 3, 4 }, FREQ_DC_ONLY },
 };
 
 static const struct channel_spec rigol_dp832_ch[] = {
-	{ "1", { 0, 30, 0.001 }, { 0, 3, 0.001 }, FREQ_DC_ONLY },
-	{ "2", { 0, 30, 0.001 }, { 0, 3, 0.001 }, FREQ_DC_ONLY },
-	{ "3", { 0, 5, 0.001 }, { 0, 3, 0.001 }, FREQ_DC_ONLY },
+	{ "1", { 0, 30, 0.001, 3, 4 }, { 0, 3, 0.001, 3, 4 }, { 0, 90, 0, 3, 4 }, FREQ_DC_ONLY },
+	{ "2", { 0, 30, 0.001, 3, 4 }, { 0, 3, 0.001, 3, 4 }, { 0, 90, 0, 3, 4 }, FREQ_DC_ONLY },
+	{ "3", { 0,  5, 0.001, 3, 4 }, { 0, 3, 0.001, 3, 4 }, { 0, 90, 0, 3, 4 }, FREQ_DC_ONLY },
 };
 
 static const struct channel_group_spec rigol_dp820_cg[] = {
@@ -294,8 +307,20 @@ static const struct scpi_command rigol_dp800_cmd[] = {
 };
 
 /* HP 663xx series */
+
+static const uint32_t hp_6630a_devopts[] = {
+	SR_CONF_CONTINUOUS,
+	SR_CONF_ENABLED | SR_CONF_SET,
+	SR_CONF_VOLTAGE | SR_CONF_GET,
+	SR_CONF_CURRENT | SR_CONF_GET,
+	SR_CONF_VOLTAGE_TARGET | SR_CONF_SET | SR_CONF_LIST,
+	SR_CONF_CURRENT_LIMIT | SR_CONF_SET | SR_CONF_LIST,
+	SR_CONF_OVER_VOLTAGE_PROTECTION_THRESHOLD | SR_CONF_SET,
+	SR_CONF_OVER_CURRENT_PROTECTION_ENABLED | SR_CONF_SET,
+};
+
 static const uint32_t hp_6632b_devopts[] = {
-	SR_CONF_CONTINUOUS | SR_CONF_SET,
+	SR_CONF_CONTINUOUS,
 	SR_CONF_ENABLED | SR_CONF_GET | SR_CONF_SET,
 	SR_CONF_VOLTAGE | SR_CONF_GET,
 	SR_CONF_CURRENT | SR_CONF_GET,
@@ -303,12 +328,29 @@ static const uint32_t hp_6632b_devopts[] = {
 	SR_CONF_CURRENT_LIMIT | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
 };
 
-static const struct channel_spec hp_6632b_ch[] = {
-	{ "1", { 0, 20.475, 0.005 }, { 0, 5.1188, 0.00132 }, FREQ_DC_ONLY },
+static const struct channel_spec hp_6633a_ch[] = {
+	{ "1", { 0, 51.188, 0.0125, 3, 4 }, { 0, 2.0475, 0.0005, 4, 5 }, { 0, 104.80743 }, FREQ_DC_ONLY },
 };
 
-static const struct channel_group_spec hp_6632b_cg[] = {
+static const struct channel_spec hp_6632b_ch[] = {
+	{ "1", { 0, 20.475, 0.005, 3, 4 }, { 0, 5.1188, 0.00132, 4, 5 }, { 0, 104.80743 }, FREQ_DC_ONLY },
+};
+
+static const struct channel_group_spec hp_663xx_cg[] = {
 	{ "1", CH_IDX(0), 0 },
+};
+
+static const struct scpi_command hp_6630a_cmd[] = {
+	{ SCPI_CMD_SET_OUTPUT_ENABLE, "OUT 1" },
+	{ SCPI_CMD_SET_OUTPUT_DISABLE, "OUT 0" },
+	{ SCPI_CMD_GET_MEAS_VOLTAGE, "VOUT?" },
+	{ SCPI_CMD_GET_MEAS_CURRENT, "IOUT?" },
+	{ SCPI_CMD_SET_VOLTAGE_TARGET, "VSET %.4f" },
+	{ SCPI_CMD_SET_CURRENT_LIMIT, "ISET %.4f" },
+	{ SCPI_CMD_SET_OVER_CURRENT_PROTECTION_ENABLE, "OCP 1" },
+	{ SCPI_CMD_SET_OVER_CURRENT_PROTECTION_DISABLE, "OCP 0" },
+	{ SCPI_CMD_SET_OVER_VOLTAGE_PROTECTION_THRESHOLD, "OVSET %.4f" },
+	ALL_ZERO
 };
 
 static const struct scpi_command hp_6632b_cmd[] = {
@@ -326,7 +368,7 @@ static const struct scpi_command hp_6632b_cmd[] = {
 
 /* Philips/Fluke PM2800 series */
 static const uint32_t philips_pm2800_devopts[] = {
-	SR_CONF_CONTINUOUS | SR_CONF_SET,
+	SR_CONF_CONTINUOUS,
 };
 
 static const uint32_t philips_pm2800_devopts_cg[] = {
@@ -353,17 +395,18 @@ enum philips_pm2800_modules {
 
 static const struct philips_pm2800_module_spec {
 	/* Min, max, programming resolution. */
-	float voltage[3];
-	float current[3];
+	float voltage[5];
+	float current[5];
+	float power[5];
 } philips_pm2800_module_specs[] = {
 	/* Autoranging modules. */
-	[PM2800_MOD_30V_10A] = { { 0, 30, 0.0075 }, { 0, 10, 0.0025 } },
-	[PM2800_MOD_60V_5A] = { { 0, 60, 0.015 }, { 0, 5, 0.00125 } },
-	[PM2800_MOD_60V_10A] = { { 0, 60, 0.015 }, { 0, 10, 0.0025 } },
+	[PM2800_MOD_30V_10A] = { { 0, 30, 0.0075, 2, 4 }, { 0, 10, 0.0025, 2, 4 }, { 0, 60 } },
+	[PM2800_MOD_60V_5A] = { { 0, 60, 0.015, 2, 3 }, { 0, 5, 0.00125, 2, 5 }, { 0, 60 } },
+	[PM2800_MOD_60V_10A] = { { 0, 60, 0.015, 2, 3 }, { 0, 10, 0.0025, 2, 5 }, { 0, 120 } },
 	/* Linear modules. */
-	[PM2800_MOD_8V_15A] = { { 0, 8, 0.002 }, { -15, 15, 0.00375 } },
-	[PM2800_MOD_60V_2A] = { { 0, 60, 0.015 }, { -2, 2, 0.0005 } },
-	[PM2800_MOD_120V_1A] = { { 0, 120, 0.030 }, { -1, 1, 0.00025 } },
+	[PM2800_MOD_8V_15A] = { { 0, 8, 0.002, 3, 3 }, { -15, 15, 0.00375, 3, 5 }, { 0, 120 } },
+	[PM2800_MOD_60V_2A] = { { 0, 60, 0.015, 2, 3 }, { -2, 2, 0.0005, 3, 4 }, { 0, 120 } },
+	[PM2800_MOD_120V_1A] = { { 0, 120, 0.030, 2, 2 }, { -1, 1, 0.00025, 3, 5 }, { 0, 120 } },
 };
 
 static const struct philips_pm2800_model {
@@ -435,11 +478,12 @@ static int philips_pm2800_probe_channels(struct sr_dev_inst *sdi,
 	for (i = 0; i < num_modules; i++) {
 		module = model->modules[i];
 		spec = &philips_pm2800_module_specs[module];
-		sr_dbg("output %d: %.0f - %.0fV, %.0f - %.0fA", i + 1,
+		sr_dbg("output %d: %.0f - %.0fV, %.0f - %.0fA, %.0f - %.0fW", i + 1,
 				spec->voltage[0], spec->voltage[1],
-				spec->current[0], spec->current[1]);
+				spec->current[0], spec->current[1],
+				spec->power[0], spec->power[1]);
 		(*channels)[i].name = (char *)philips_pm2800_names[i];
-		memcpy(&((*channels)[i].voltage), spec, sizeof(float) * 6);
+		memcpy(&((*channels)[i].voltage), spec, sizeof(float) * 15);
 		(*channel_groups)[i].name = (char *)philips_pm2800_names[i];
 		(*channel_groups)[i].channel_index_mask = 1 << i;
 		(*channel_groups)[i].features = PPS_OTP | PPS_OVP | PPS_OCP;
@@ -471,13 +515,69 @@ static const struct scpi_command philips_pm2800_cmd[] = {
 	ALL_ZERO
 };
 
+static const uint32_t rs_hmc8043_devopts[] = {
+	SR_CONF_CONTINUOUS,
+};
+
+static const uint32_t rs_hmc8043_devopts_cg[] = {
+	SR_CONF_OVER_VOLTAGE_PROTECTION_ENABLED | SR_CONF_GET | SR_CONF_SET,
+	SR_CONF_OVER_VOLTAGE_PROTECTION_ACTIVE | SR_CONF_GET,
+	SR_CONF_OVER_VOLTAGE_PROTECTION_THRESHOLD | SR_CONF_GET | SR_CONF_SET,
+	SR_CONF_VOLTAGE | SR_CONF_GET,
+	SR_CONF_VOLTAGE_TARGET | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
+	SR_CONF_CURRENT | SR_CONF_GET,
+	SR_CONF_CURRENT_LIMIT | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
+	SR_CONF_ENABLED | SR_CONF_GET | SR_CONF_SET,
+};
+
+static const struct channel_spec rs_hmc8043_ch[] = {
+	{ "1", { 0, 32.050, 0.001, 3, 4 }, { 0.001, 3, 0.001, 3, 4 }, { 0, 0, 0, 0, 4 }, FREQ_DC_ONLY },
+	{ "2", { 0, 32.050, 0.001, 3, 4 }, { 0.001, 3, 0.001, 3, 4 }, { 0, 0, 0, 0, 4 }, FREQ_DC_ONLY },
+	{ "3", { 0, 32.050, 0.001, 3, 4 }, { 0.001, 3, 0.001, 3, 4 }, { 0, 0, 0, 0, 4 }, FREQ_DC_ONLY },
+};
+
+static const struct channel_group_spec rs_hmc8043_cg[] = {
+	{ "1", CH_IDX(0), PPS_OVP },
+	{ "2", CH_IDX(1), PPS_OVP },
+	{ "3", CH_IDX(2), PPS_OVP },
+};
+
+static const struct scpi_command rs_hmc8043_cmd[] = {
+	{ SCPI_CMD_SELECT_CHANNEL, "INST:NSEL %s" },
+	{ SCPI_CMD_GET_MEAS_VOLTAGE, "MEAS:VOLT?" },
+	{ SCPI_CMD_GET_MEAS_CURRENT, "MEAS:CURR?" },
+	{ SCPI_CMD_GET_VOLTAGE_TARGET, "VOLT?" },
+	{ SCPI_CMD_SET_VOLTAGE_TARGET, "VOLT %.6f" },
+	{ SCPI_CMD_GET_CURRENT_LIMIT, "CURR?" },
+	{ SCPI_CMD_SET_CURRENT_LIMIT, "CURR %.6f" },
+	{ SCPI_CMD_GET_OUTPUT_ENABLED, "OUTP?" },
+	{ SCPI_CMD_SET_OUTPUT_ENABLE, "OUTP ON" },
+	{ SCPI_CMD_SET_OUTPUT_DISABLE, "OUTP OFF" },
+	{ SCPI_CMD_GET_OVER_VOLTAGE_PROTECTION_ACTIVE, "VOLT:PROT:TRIP?" },
+	{ SCPI_CMD_GET_OVER_VOLTAGE_PROTECTION_THRESHOLD, "VOLT:PROT:LEV?" },
+	{ SCPI_CMD_SET_OVER_VOLTAGE_PROTECTION_THRESHOLD, "VOLT:PROT:LEV %.6f" },
+	{ SCPI_CMD_GET_OVER_VOLTAGE_PROTECTION_ENABLED, "VOLT:PROT:STAT?" },
+	{ SCPI_CMD_SET_OVER_VOLTAGE_PROTECTION_ENABLE, "VOLT:PROT:STAT ON" },
+	{ SCPI_CMD_SET_OVER_VOLTAGE_PROTECTION_DISABLE, "VOLT:PROT:STAT OFF" },
+	ALL_ZERO
+};
+
 SR_PRIV const struct scpi_pps pps_profiles[] = {
+	/* Agilent N5763A */
+	{ "Agilent", "N5763A", 0,
+		ARRAY_AND_SIZE(agilent_n5700a_devopts),
+		ARRAY_AND_SIZE(agilent_n5700a_devopts_cg),
+		ARRAY_AND_SIZE(agilent_n5763a_ch),
+		ARRAY_AND_SIZE(agilent_n5700a_cg),
+		agilent_n5700a_cmd,
+		.probe_channels = NULL,
+	},
 	/* Agilent N5767A */
 	{ "Agilent", "N5767A", 0,
 		ARRAY_AND_SIZE(agilent_n5700a_devopts),
 		ARRAY_AND_SIZE(agilent_n5700a_devopts_cg),
 		ARRAY_AND_SIZE(agilent_n5767a_ch),
-		ARRAY_AND_SIZE(agilent_n5767a_cg),
+		ARRAY_AND_SIZE(agilent_n5700a_cg),
 		agilent_n5700a_cmd,
 		.probe_channels = NULL,
 	},
@@ -499,12 +599,22 @@ SR_PRIV const struct scpi_pps pps_profiles[] = {
 		chroma_62000_cmd,
 		.probe_channels = chroma_62000p_probe_channels,
 	},
+	/* HP 6633A */
+	{ "HP", "6633A", 0,
+		ARRAY_AND_SIZE(hp_6630a_devopts),
+		ARRAY_AND_SIZE(devopts_none),
+		ARRAY_AND_SIZE(hp_6633a_ch),
+		ARRAY_AND_SIZE(hp_663xx_cg),
+		hp_6630a_cmd,
+		.probe_channels = NULL,
+	},
+
 	/* HP 6632B */
 	{ "HP", "6632B", 0,
 		ARRAY_AND_SIZE(hp_6632b_devopts),
 		ARRAY_AND_SIZE(devopts_none),
 		ARRAY_AND_SIZE(hp_6632b_ch),
-		ARRAY_AND_SIZE(hp_6632b_cg),
+		ARRAY_AND_SIZE(hp_663xx_cg),
 		hp_6632b_cmd,
 		.probe_channels = NULL,
 	},
@@ -543,6 +653,16 @@ SR_PRIV const struct scpi_pps pps_profiles[] = {
 		NULL, 0,
 		philips_pm2800_cmd,
 		philips_pm2800_probe_channels,
+	},
+
+	/* Rohde & Schwarz HMC8043 */
+	{ "Rohde&Schwarz", "HMC8043", 0,
+		ARRAY_AND_SIZE(rs_hmc8043_devopts),
+		ARRAY_AND_SIZE(rs_hmc8043_devopts_cg),
+		ARRAY_AND_SIZE(rs_hmc8043_ch),
+		ARRAY_AND_SIZE(rs_hmc8043_cg),
+		rs_hmc8043_cmd,
+		.probe_channels = NULL,
 	},
 };
 

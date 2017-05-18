@@ -31,7 +31,7 @@ static const uint32_t drvopts[] = {
 };
 
 static const uint32_t devopts[] = {
-	SR_CONF_CONTINUOUS | SR_CONF_SET,
+	SR_CONF_CONTINUOUS,
 	SR_CONF_LIMIT_SAMPLES | SR_CONF_GET | SR_CONF_SET,
 	SR_CONF_LIMIT_MSEC | SR_CONF_GET | SR_CONF_SET,
 };
@@ -53,9 +53,11 @@ static const uint32_t devopts_cg[] = {
 	SR_CONF_OVER_TEMPERATURE_PROTECTION_ACTIVE | SR_CONF_GET,
 };
 
-/* The IDs in this list are only guessed and needs to be verified
-   against some real hardware. If at least a few of them matches,
-   it will probably be safe to enable the others. */
+/*
+ * The IDs in this list are only guessed and needs to be verified
+ * against some real hardware. If at least a few of them matches,
+ * it will probably be safe to enable the others.
+ */
 static const struct maynuo_m97_model supported_models[] = {
 //	{  53, "M9711"     ,   30, 150,    150 },
 //	{  54, "M9712"     ,   30, 150,    300 },
@@ -109,12 +111,7 @@ static const struct maynuo_m97_model supported_models[] = {
 //	{ 102, "M9812B"    ,   15, 500,    300 },
 };
 
-SR_PRIV struct sr_dev_driver maynuo_m97_driver_info;
-
-static int init(struct sr_dev_driver *di, struct sr_context *sr_ctx)
-{
-	return std_init(sr_ctx, di, LOG_PREFIX);
-}
+static struct sr_dev_driver maynuo_m97_driver_info;
 
 static struct sr_dev_inst *probe_device(struct sr_modbus_dev_inst *modbus)
 {
@@ -135,12 +132,12 @@ static struct sr_dev_inst *probe_device(struct sr_modbus_dev_inst *modbus)
 			break;
 		}
 	if (model == NULL) {
-		sr_err("Unkown model: %d.", id);
+		sr_err("Unknown model: %d.", id);
 		return NULL;
 	}
 
 	sdi = g_malloc0(sizeof(struct sr_dev_inst));
-	sdi->status = SR_ST_ACTIVE;
+	sdi->status = SR_ST_INACTIVE;
 	sdi->vendor = g_strdup("Maynuo");
 	sdi->model = g_strdup(model->name);
 	sdi->version = g_strdup_printf("v%d.%d", version/10, version%10);
@@ -175,12 +172,12 @@ static int config_compare(gconstpointer a, gconstpointer b)
 static GSList *scan(struct sr_dev_driver *di, GSList *options)
 {
 	struct sr_config default_serialcomm = {
-	    .key = SR_CONF_SERIALCOMM,
-	    .data = g_variant_new_string("9600/8n1"),
+		.key = SR_CONF_SERIALCOMM,
+		.data = g_variant_new_string("9600/8n1"),
 	};
 	struct sr_config default_modbusaddr = {
-	    .key = SR_CONF_MODBUSADDR,
-	    .data = g_variant_new_uint64(1),
+		.key = SR_CONF_MODBUSADDR,
+		.data = g_variant_new_uint64(1),
 	};
 	GSList *opts = options, *devices;
 
@@ -197,16 +194,6 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 	g_variant_unref(default_modbusaddr.data);
 
 	return devices;
-}
-
-static GSList *dev_list(const struct sr_dev_driver *di)
-{
-	return ((struct drv_context *)(di->context))->instances;
-}
-
-static int dev_clear(const struct sr_dev_driver *di)
-{
-	return std_dev_clear(di, g_free);
 }
 
 static int dev_open(struct sr_dev_inst *sdi)
@@ -239,8 +226,7 @@ static int dev_close(struct sr_dev_inst *sdi)
 			/* Wait for the last data that was requested from the device. */
 			uint16_t registers[devc->expecting_registers];
 			sr_modbus_read_holding_registers(modbus, -1,
-			                                 devc->expecting_registers,
-			                                 registers);
+				devc->expecting_registers, registers);
 		}
 
 		maynuo_m97_set_bit(modbus, PC1, 0);
@@ -251,11 +237,6 @@ static int dev_close(struct sr_dev_inst *sdi)
 	}
 
 	return SR_OK;
-}
-
-static int cleanup(const struct sr_dev_driver *di)
-{
-	return dev_clear(di);
 }
 
 static int config_get(uint32_t key, GVariant **data, const struct sr_dev_inst *sdi,
@@ -275,10 +256,8 @@ static int config_get(uint32_t key, GVariant **data, const struct sr_dev_inst *s
 	ret = SR_OK;
 	switch (key) {
 	case SR_CONF_LIMIT_SAMPLES:
-		*data = g_variant_new_uint64(devc->limit_samples);
-		break;
 	case SR_CONF_LIMIT_MSEC:
-		*data = g_variant_new_uint64(devc->limit_msec);
+		ret = sr_sw_limits_config_get(&devc->limits, key, data);
 		break;
 	case SR_CONF_ENABLED:
 		if ((ret = maynuo_m97_get_bit(modbus, ISTATE, &ivalue)) == SR_OK)
@@ -351,7 +330,6 @@ static int config_set(uint32_t key, GVariant *data, const struct sr_dev_inst *sd
 	struct sr_modbus_dev_inst *modbus;
 	int ret;
 
-	(void)data;
 	(void)cg;
 
 	if (sdi->status != SR_ST_ACTIVE)
@@ -363,10 +341,8 @@ static int config_set(uint32_t key, GVariant *data, const struct sr_dev_inst *sd
 	ret = SR_OK;
 	switch (key) {
 	case SR_CONF_LIMIT_SAMPLES:
-		devc->limit_samples = g_variant_get_uint64(data);
-		break;
 	case SR_CONF_LIMIT_MSEC:
-		devc->limit_msec = g_variant_get_uint64(data);
+		ret = sr_sw_limits_config_set(&devc->limits, key, data);
 		break;
 	case SR_CONF_ENABLED:
 		ret = maynuo_m97_set_input(modbus, g_variant_get_boolean(data));
@@ -453,14 +429,11 @@ static int config_list(uint32_t key, GVariant **data, const struct sr_dev_inst *
 	return ret;
 }
 
-static int dev_acquisition_start(const struct sr_dev_inst *sdi,
-		void *cb_data)
+static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 {
 	struct dev_context *devc;
 	struct sr_modbus_dev_inst *modbus;
 	int ret;
-
-	(void)cb_data;
 
 	if (sdi->status != SR_ST_ACTIVE)
 		return SR_ERR_DEV_CLOSED;
@@ -472,28 +445,20 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi,
 			maynuo_m97_receive_data, (void *)sdi)) != SR_OK)
 		return ret;
 
-	/* Send header packet to the session bus. */
-	std_session_send_df_header(sdi, LOG_PREFIX);
-
-	devc->num_samples = 0;
-	devc->starttime = g_get_monotonic_time();
+	sr_sw_limits_acquisition_start(&devc->limits);
+	std_session_send_df_header(sdi);
 
 	return maynuo_m97_capture_start(sdi);
 }
 
-static int dev_acquisition_stop(struct sr_dev_inst *sdi, void *cb_data)
+static int dev_acquisition_stop(struct sr_dev_inst *sdi)
 {
 	struct sr_modbus_dev_inst *modbus;
-	struct sr_datafeed_packet packet;
-
-	(void)cb_data;
 
 	if (sdi->status != SR_ST_ACTIVE)
 		return SR_ERR_DEV_CLOSED;
 
-	/* End of last frame. */
-	packet.type = SR_DF_END;
-	sr_session_send(sdi, &packet);
+	std_session_send_df_end(sdi);
 
 	modbus = sdi->conn;
 	sr_modbus_source_remove(sdi->session, modbus);
@@ -501,15 +466,14 @@ static int dev_acquisition_stop(struct sr_dev_inst *sdi, void *cb_data)
 	return SR_OK;
 }
 
-SR_PRIV struct sr_dev_driver maynuo_m97_driver_info = {
+static struct sr_dev_driver maynuo_m97_driver_info = {
 	.name = "maynuo-m97",
 	.longname = "maynuo M97/M98 series",
 	.api_version = 1,
-	.init = init,
-	.cleanup = cleanup,
+	.init = std_init,
+	.cleanup = std_cleanup,
 	.scan = scan,
-	.dev_list = dev_list,
-	.dev_clear = dev_clear,
+	.dev_list = std_dev_list,
 	.config_get = config_get,
 	.config_set = config_set,
 	.config_list = config_list,
@@ -519,3 +483,4 @@ SR_PRIV struct sr_dev_driver maynuo_m97_driver_info = {
 	.dev_acquisition_stop = dev_acquisition_stop,
 	.context = NULL,
 };
+SR_REGISTER_DEV_DRIVER(maynuo_m97_driver_info);

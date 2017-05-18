@@ -14,8 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef LIBSIGROK_HARDWARE_ARACHNID_LABS_RE_LOAD_PRO_PROTOCOL_H
@@ -32,10 +31,7 @@
 
 /** Private, per-device-instance driver context. */
 struct dev_context {
-	uint64_t limit_samples;
-	uint64_t limit_msec;
-	uint64_t num_samples;
-	int64_t starttime;
+	struct sr_sw_limits limits;
 	uint8_t buf[RELOADPRO_BUFSIZE];
 	int buflen;
 	gboolean otp_active;

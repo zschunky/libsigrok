@@ -125,7 +125,7 @@ SR_PRIV struct sr_dev_driver hantek_4032l_driver_info;
 
 static int init(struct sr_dev_driver *di, struct sr_context *sr_ctx)
 {
-	return std_init(sr_ctx, di, LOG_PREFIX);
+	return std_init(di, sr_ctx);
 }
 
 static GSList *scan(struct sr_dev_driver *di, GSList *options)
@@ -358,10 +358,8 @@ static int config_list(uint32_t key, GVariant **data,
   return SR_ERR_NA;
 }
 
-static int dev_acquisition_start(const struct sr_dev_inst *sdi, void *cb_data)
+static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 {
-	(void)cb_data;
-
 	if (sdi->status != SR_ST_ACTIVE)
 		return SR_ERR_DEV_CLOSED;
 
@@ -445,10 +443,8 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi, void *cb_data)
   return h4032l_protocol_start(sdi);
 }
 
-static int dev_acquisition_stop(struct sr_dev_inst *sdi, void *cb_data)
+static int dev_acquisition_stop(struct sr_dev_inst *sdi)
 {
-	(void)cb_data;
-
 	if (sdi->status != SR_ST_ACTIVE)
 		return SR_ERR_DEV_CLOSED;
 

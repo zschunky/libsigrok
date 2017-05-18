@@ -194,6 +194,6 @@ SR_PRIV int h4032l_protocol_start(const struct sr_dev_inst *sdi)
     return SR_ERR;
   }
 
-  std_session_send_df_header(sdi, LOG_PREFIX);
+  std_session_send_df_header(sdi);
   return SR_OK;
 }

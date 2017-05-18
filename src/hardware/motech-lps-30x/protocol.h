@@ -18,9 +18,12 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-/** @file
- *  <em>Motech LPS-30x series</em> power supply driver
- *  @internal
+/**
+ * @file
+ *
+ * <em>Motech LPS-30x series</em> power supply driver
+ *
+ * @internal
  */
 
 #ifndef LIBSIGROK_HARDWARE_MOTECH_LPS_30X_PROTOCOL_H
@@ -97,8 +100,7 @@ struct dev_context {
 
 	/* Acquisition status */
 	gboolean acq_running;		/**< Acquisition is running. */
-	uint64_t limit_samples;		/**< Target number of samples */
-	uint64_t limit_msec;		/**< Target sampling time */
+	struct sr_sw_limits limits;
 	acquisition_req acq_req;	/**< Current request. */
 	uint8_t	acq_req_pending;	/**< Request pending. 0=none, 1=reply, 2=OK */
 
@@ -108,8 +110,6 @@ struct dev_context {
 
 	/* Temporary state across callbacks */
 	int64_t req_sent_at;    /**< Request sent. */
-	uint64_t num_samples;	/**< Current #samples for limit_samples */
-	GTimer *elapsed_msec;	/**< Used for sampling with limit_msec  */
 	gchar buf[LINELEN_MAX];	/**< Buffer for read callback */
 	int buflen;		/**< Data len in buf */
 };

@@ -14,8 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef LIBSIGROK_HARDWARE_CHRONOVU_LA_PROTOCOL_H
@@ -68,8 +67,6 @@ struct dev_context {
 
 	/** The current sampling limit (in number of samples). */
 	uint64_t limit_samples;
-
-	void *cb_data;
 
 	/**
 	 * A buffer containing some (mangled) samples from the device.
@@ -137,6 +134,6 @@ SR_PRIV int cv_write(struct dev_context *devc, uint8_t *buf, int size);
 SR_PRIV int cv_convert_trigger(const struct sr_dev_inst *sdi);
 SR_PRIV int cv_set_samplerate(const struct sr_dev_inst *sdi, uint64_t samplerate);
 SR_PRIV int cv_read_block(struct dev_context *devc);
-SR_PRIV void cv_send_block_to_session_bus(struct dev_context *devc, int block);
+SR_PRIV void cv_send_block_to_session_bus(const struct sr_dev_inst *sdi, int block);
 
 #endif

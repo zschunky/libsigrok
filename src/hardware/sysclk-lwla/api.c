@@ -61,13 +61,6 @@ static const char *const signal_edge_names[] = {
 	[EDGE_NEGATIVE] = "f",
 };
 
-/* Initialize the SysClk LWLA driver.
- */
-static int init(struct sr_dev_driver *di, struct sr_context *sr_ctx)
-{
-	return std_init(sr_ctx, di, LOG_PREFIX);
-}
-
 /* Create a new sigrok device instance for the indicated LWLA model.
  */
 static struct sr_dev_inst *dev_inst_new(const struct model_info *model)
@@ -201,22 +194,13 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 			continue; /* no match */
 
 		/* Register device instance with driver. */
-		sdi->driver = di;
-		drvc->instances = g_slist_append(drvc->instances, sdi);
 		devices = g_slist_append(devices, sdi);
 	}
 
 	libusb_free_device_list(devlist, 1);
 	g_slist_free_full(conn_devices, (GDestroyNotify)&sr_usb_dev_inst_free);
 
-	return devices;
-}
-
-/* Return the list of devices found during scan.
- */
-static GSList *dev_list(const struct sr_dev_driver *di)
-{
-	return ((struct drv_context *)(di->context))->instances;
+	return std_scan_complete(di, devices);
 }
 
 /* Destroy the private device context.
@@ -289,10 +273,6 @@ static int dev_open(struct sr_dev_inst *sdi)
 	devc = sdi->priv;
 	usb = sdi->conn;
 
-	if (!drvc) {
-		sr_err("Driver was not initialized.");
-		return SR_ERR;
-	}
 	if (sdi->status != SR_ST_INACTIVE) {
 		sr_err("Device already open.");
 		return SR_ERR;
@@ -356,19 +336,13 @@ static int dev_open(struct sr_dev_inst *sdi)
  */
 static int dev_close(struct sr_dev_inst *sdi)
 {
-	struct drv_context *drvc;
 	struct dev_context *devc;
 	struct sr_usb_dev_inst *usb;
 	int ret;
 
-	drvc = sdi->driver->context;
 	devc = sdi->priv;
 	usb = sdi->conn;
 
-	if (!drvc) {
-		sr_err("Driver was not initialized.");
-		return SR_ERR;
-	}
 	if (sdi->status == SR_ST_INACTIVE) {
 		sr_dbg("Device already closed.");
 		return SR_OK;
@@ -767,10 +741,8 @@ static int config_list(uint32_t key, GVariant **data,
  * configured trigger conditions are met, or immediately if no triggers
  * are configured.
  */
-static int dev_acquisition_start(const struct sr_dev_inst *sdi, void *cb_data)
+static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 {
-	(void)cb_data;
-
 	if (sdi->status != SR_ST_ACTIVE)
 		return SR_ERR_DEV_CLOSED;
 
@@ -781,11 +753,9 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi, void *cb_data)
 
 /* Request that a running capture operation be stopped.
  */
-static int dev_acquisition_stop(struct sr_dev_inst *sdi, void *cb_data)
+static int dev_acquisition_stop(struct sr_dev_inst *sdi)
 {
 	struct dev_context *devc;
-
-	(void)cb_data;
 
 	devc = sdi->priv;
 
@@ -802,14 +772,14 @@ static int dev_acquisition_stop(struct sr_dev_inst *sdi, void *cb_data)
 
 /* SysClk LWLA driver descriptor.
  */
-SR_PRIV struct sr_dev_driver sysclk_lwla_driver_info = {
+static struct sr_dev_driver sysclk_lwla_driver_info = {
 	.name = "sysclk-lwla",
 	.longname = "SysClk LWLA series",
 	.api_version = 1,
-	.init = init,
-	.cleanup = dev_clear,
+	.init = std_init,
+	.cleanup = std_cleanup,
 	.scan = scan,
-	.dev_list = dev_list,
+	.dev_list = std_dev_list,
 	.dev_clear = dev_clear,
 	.config_get = config_get,
 	.config_set = config_set,
@@ -822,3 +792,4 @@ SR_PRIV struct sr_dev_driver sysclk_lwla_driver_info = {
 	.dev_acquisition_stop = dev_acquisition_stop,
 	.context = NULL,
 };
+SR_REGISTER_DEV_DRIVER(sysclk_lwla_driver_info);

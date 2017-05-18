@@ -15,14 +15,16 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
-/** @file
-  *  <em>Manson HCS-3xxx Series</em> power supply driver
-  *  @internal
-  */
+/**
+ * @file
+ *
+ * <em>Manson HCS-3xxx Series</em> power supply driver
+ *
+ * @internal
+ */
 
 #ifndef LIBSIGROK_HARDWARE_MANSON_HCS_3XXX_PROTOCOL_H
 #define LIBSIGROK_HARDWARE_MANSON_HCS_3XXX_PROTOCOL_H
@@ -68,14 +70,9 @@ struct hcs_model {
 struct dev_context {
 	const struct hcs_model *model; /**< Model information. */
 
-	uint64_t limit_samples;
-	uint64_t limit_msec;
-	uint64_t num_samples;
-	int64_t starttime;
+	struct sr_sw_limits limits;
 	int64_t req_sent_at;
 	gboolean reply_pending;
-
-	void *cb_data;
 
 	float current;		/**< Last current value [A] read from device. */
 	float current_max;	/**< Output current set. */

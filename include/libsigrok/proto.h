@@ -30,9 +30,16 @@
 
 SR_API int sr_analog_to_float(const struct sr_datafeed_analog *analog,
 		float *buf);
+SR_API const char *sr_analog_si_prefix(float *value, int *digits);
+SR_API gboolean sr_analog_si_prefix_friendly(enum sr_unit unit);
 SR_API int sr_analog_unit_to_string(const struct sr_datafeed_analog *analog,
 		char **result);
 SR_API void sr_rational_set(struct sr_rational *r, int64_t p, uint64_t q);
+SR_API int sr_rational_eq(const struct sr_rational *a, const struct sr_rational *b);
+SR_API int sr_rational_mult(struct sr_rational *res, const struct sr_rational *a,
+		const struct sr_rational *b);
+SR_API int sr_rational_div(struct sr_rational *res, const struct sr_rational *num,
+		const struct sr_rational *div);
 
 /*--- backend.c -------------------------------------------------------------*/
 
@@ -154,6 +161,7 @@ SR_API int sr_input_scan_file(const char *filename, const struct sr_input **in);
 SR_API struct sr_dev_inst *sr_input_dev_inst_get(const struct sr_input *in);
 SR_API int sr_input_send(const struct sr_input *in, GString *buf);
 SR_API int sr_input_end(const struct sr_input *in);
+SR_API int sr_input_reset(const struct sr_input *in);
 SR_API void sr_input_free(const struct sr_input *in);
 
 /*--- output/output.c -------------------------------------------------------*/
@@ -218,13 +226,14 @@ SR_API int sr_resource_set_hooks(struct sr_context *ctx,
 
 SR_API char *sr_si_string_u64(uint64_t x, const char *unit);
 SR_API char *sr_samplerate_string(uint64_t samplerate);
-SR_API char *sr_period_string(uint64_t frequency);
+SR_API char *sr_period_string(uint64_t v_p, uint64_t v_q);
 SR_API char *sr_voltage_string(uint64_t v_p, uint64_t v_q);
 SR_API int sr_parse_sizestring(const char *sizestring, uint64_t *size);
 SR_API uint64_t sr_parse_timestring(const char *timestring);
 SR_API gboolean sr_parse_boolstring(const char *boolstring);
 SR_API int sr_parse_period(const char *periodstr, uint64_t *p, uint64_t *q);
 SR_API int sr_parse_voltage(const char *voltstr, uint64_t *p, uint64_t *q);
+SR_API int sr_parse_rational(const char *str, struct sr_rational *ret);
 
 /*--- version.c -------------------------------------------------------------*/
 

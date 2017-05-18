@@ -51,7 +51,7 @@ SR_PRIV const uint64_t samplerates[] = {
 	SR_MHZ(200),	/* Special FW needed */
 };
 
-SR_PRIV const int SAMPLERATES_COUNT = ARRAY_SIZE(samplerates);
+SR_PRIV const size_t samplerates_count = ARRAY_SIZE(samplerates);
 
 static const char sigma_firmware_files[][24] = {
 	/* 50 MHz, supports 8 bit fractions */
@@ -105,9 +105,9 @@ SR_PRIV int sigma_write_register(uint8_t reg, uint8_t *data, size_t len,
 	uint8_t buf[80];
 	int idx = 0;
 
-	if ((len + 2) > sizeof(buf)) {
+	if ((2 * len + 2) > sizeof(buf)) {
 		sr_err("Attempted to write %zu bytes, but buffer is too small.",
-		       len + 2);
+		       len);
 		return SR_ERR_BUG;
 	}
 
@@ -388,12 +388,13 @@ static int sigma_fw_2_bitbang(struct sr_context *ctx, const char *name,
 	int bit, v;
 	int ret = SR_OK;
 
+	/* Retrieve the on-disk firmware file content. */
 	firmware = sr_resource_load(ctx, SR_RESOURCE_FIRMWARE,
 			name, &file_size, 256 * 1024);
 	if (!firmware)
 		return SR_ERR;
 
-	/* Weird magic transformation below, I have no idea what it does. */
+	/* Unscramble the file content (XOR with "random" sequence). */
 	imm = 0x3f6df2ab;
 	for (i = 0; i < file_size; i++) {
 		imm = (imm + 0xa853753) % 177 + (imm * 0x8034052);
@@ -401,13 +402,20 @@ static int sigma_fw_2_bitbang(struct sr_context *ctx, const char *name,
 	}
 
 	/*
-	 * Now that the firmware is "transformed", we will transcribe the
-	 * firmware blob into a sequence of toggles of the Dx wires. This
-	 * sequence will be fed directly into the Sigma, which must be in
-	 * the FPGA bitbang programming mode.
+	 * Generate a sequence of bitbang samples. With two samples per
+	 * FPGA configuration bit, providing the level for the DIN signal
+	 * as well as two edges for CCLK. See Xilinx UG332 for details
+	 * ("slave serial" mode).
+	 *
+	 * Note that CCLK is inverted in hardware. That's why the
+	 * respective bit is first set and then cleared in the bitbang
+	 * sample sets. So that the DIN level will be stable when the
+	 * data gets sampled at the rising CCLK edge, and the signals'
+	 * setup time constraint will be met.
+	 *
+	 * The caller will put the FPGA into download mode, will send
+	 * the bitbang samples, and release the allocated memory.
 	 */
-
-	/* Each bit of firmware is transcribed as two toggles of Dx wires. */
 	bb_size = file_size * 8 * 2;
 	bb_stream = (uint8_t *)g_try_malloc(bb_size);
 	if (!bb_stream) {
@@ -415,7 +423,6 @@ static int sigma_fw_2_bitbang(struct sr_context *ctx, const char *name,
 		ret = SR_ERR_MALLOC;
 		goto exit;
 	}
-
 	bbs = bb_stream;
 	for (i = 0; i < file_size; i++) {
 		for (bit = 7; bit >= 0; bit--) {
@@ -516,20 +523,26 @@ SR_PRIV int sigma_set_samplerate(const struct sr_dev_inst *sdi, uint64_t sampler
 {
 	struct dev_context *devc;
 	struct drv_context *drvc;
-	unsigned int i;
+	size_t i;
 	int ret;
 
 	devc = sdi->priv;
 	drvc = sdi->driver->context;
 	ret = SR_OK;
 
-	for (i = 0; i < ARRAY_SIZE(samplerates); i++) {
+	/* Reject rates that are not in the list of supported rates. */
+	for (i = 0; i < samplerates_count; i++) {
 		if (samplerates[i] == samplerate)
 			break;
 	}
-	if (samplerates[i] == 0)
+	if (i >= samplerates_count || samplerates[i] == 0)
 		return SR_ERR_SAMPLERATE;
 
+	/*
+	 * Depending on the samplerates of 200/100/50- MHz, specific
+	 * firmware is required and higher rates might limit the set
+	 * of available channels.
+	 */
 	if (samplerate <= SR_MHZ(50)) {
 		ret = upload_firmware(drvc->sr_ctx, 0, devc);
 		devc->num_channels = 16;
@@ -541,11 +554,28 @@ SR_PRIV int sigma_set_samplerate(const struct sr_dev_inst *sdi, uint64_t sampler
 		devc->num_channels = 4;
 	}
 
+	/*
+	 * Derive the sample period from the sample rate as well as the
+	 * number of samples that the device will communicate within
+	 * an "event" (memory organization internal to the device).
+	 */
 	if (ret == SR_OK) {
 		devc->cur_samplerate = samplerate;
 		devc->period_ps = 1000000000000ULL / samplerate;
 		devc->samples_per_event = 16 / devc->num_channels;
 		devc->state.state = SIGMA_IDLE;
+	}
+
+	/*
+	 * Support for "limit_samples" is implemented by stopping
+	 * acquisition after a corresponding period of time.
+	 * Re-calculate that period of time, in case the limit is
+	 * set first and the samplerate gets (re-)configured later.
+	 */
+	if (ret == SR_OK && devc->limit_samples) {
+		uint64_t msecs;
+		msecs = devc->limit_samples * 1000 / devc->cur_samplerate;
+		devc->limit_msec = msecs;
 	}
 
 	return ret;
@@ -835,7 +865,6 @@ static int download_capture(struct sr_dev_inst *sdi)
 	struct sigma_dram_line *dram_line;
 	int bufsz;
 	uint32_t stoppos, triggerpos;
-	struct sr_datafeed_packet packet;
 	uint8_t modestatus;
 
 	uint32_t i;
@@ -907,11 +936,9 @@ static int download_capture(struct sr_dev_inst *sdi)
 		dl_lines_done += dl_lines_curr;
 	}
 
-	/* All done. */
-	packet.type = SR_DF_END;
-	sr_session_send(sdi, &packet);
+	std_session_send_df_end(sdi);
 
-	sdi->driver->dev_acquisition_stop(sdi, sdi);
+	sdi->driver->dev_acquisition_stop(sdi);
 
 	g_free(dram_line);
 

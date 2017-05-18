@@ -257,11 +257,14 @@ static int sanity_check_all_drivers(const struct sr_context *ctx)
 			sr_err("No dev_list in driver %d ('%s').", i, d);
 			errors++;
 		}
+		/* Note: dev_clear() is optional. */
 		/* Note: config_get() is optional. */
 		if (!drivers[i]->config_set) {
 			sr_err("No config_set in driver %d ('%s').", i, d);
 			errors++;
 		}
+		/* Note: config_channel_set() is optional. */
+		/* Note: config_commit() is optional. */
 		if (!drivers[i]->config_list) {
 			sr_err("No config_list in driver %d ('%s').", i, d);
 			errors++;
@@ -465,8 +468,6 @@ SR_API int sr_init(struct sr_context **ctx)
 {
 	int ret = SR_ERR;
 	struct sr_context *context;
-	struct sr_dev_driver ***lists, **drivers;
-	GArray *array;
 #ifdef _WIN32
 	WSADATA wsadata;
 #endif
@@ -480,13 +481,7 @@ SR_API int sr_init(struct sr_context **ctx)
 
 	context = g_malloc0(sizeof(struct sr_context));
 
-	/* Generate ctx->driver_list at runtime. */
-	array = g_array_new(TRUE, FALSE, sizeof(struct sr_dev_driver *));
-	for (lists = drivers_lists; *lists; lists++)
-		for (drivers = *lists; *drivers; drivers++)
-			g_array_append_val(array, *drivers);
-	context->driver_list = (struct sr_dev_driver **)array->data;
-	g_array_free(array, FALSE);
+	sr_drivers_init(context);
 
 	if (sanity_check_all_drivers(context) < 0) {
 		sr_err("Internal driver error(s), aborting.");

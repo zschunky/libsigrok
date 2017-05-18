@@ -23,7 +23,7 @@
 #include "scpi.h"
 #include "protocol.h"
 
-SR_PRIV struct sr_dev_driver yokogawa_dlm_driver_info;
+static struct sr_dev_driver yokogawa_dlm_driver_info;
 
 static const char *MANUFACTURER_ID = "YOKOGAWA";
 static const char *MANUFACTURER_NAME = "Yokogawa";
@@ -43,14 +43,14 @@ static const uint32_t dlm_devopts[] = {
 	SR_CONF_TIMEBASE | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
 	SR_CONF_NUM_HDIV | SR_CONF_GET,
 	SR_CONF_HORIZ_TRIGGERPOS | SR_CONF_GET | SR_CONF_SET,
-	SR_CONF_TRIGGER_SLOPE | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
 	SR_CONF_TRIGGER_SOURCE | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
+	SR_CONF_TRIGGER_SLOPE | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
 };
 
 static const uint32_t dlm_analog_devopts[] = {
-	SR_CONF_COUPLING | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
-	SR_CONF_VDIV | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
 	SR_CONF_NUM_VDIV | SR_CONF_GET,
+	SR_CONF_VDIV | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
+	SR_CONF_COUPLING | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
 };
 
 static const uint32_t dlm_digital_devopts[] = {
@@ -62,11 +62,6 @@ enum {
 	CG_ANALOG,
 	CG_DIGITAL,
 };
-
-static int init(struct sr_dev_driver *di, struct sr_context *sr_ctx)
-{
-	return std_init(sr_ctx, di, LOG_PREFIX);
-}
 
 static struct sr_dev_inst *probe_usbtmc_device(struct sr_scpi_dev_inst *scpi)
 {
@@ -114,10 +109,8 @@ static struct sr_dev_inst *probe_usbtmc_device(struct sr_scpi_dev_inst *scpi)
 	return sdi;
 
 fail:
-	if (hw_info)
-		sr_scpi_hw_info_free(hw_info);
-	if (sdi)
-		sr_dev_inst_free(sdi);
+	sr_scpi_hw_info_free(hw_info);
+	sr_dev_inst_free(sdi);
 	g_free(devc);
 
 	return NULL;
@@ -126,11 +119,6 @@ fail:
 static GSList *scan(struct sr_dev_driver *di, GSList *options)
 {
 	return sr_scpi_scan(di->context, options, probe_usbtmc_device);
-}
-
-static GSList *dev_list(const struct sr_dev_driver *di)
-{
-	return ((struct drv_context *)(di->context))->instances;
 }
 
 static void clear_helper(void *priv)
@@ -172,13 +160,6 @@ static int dev_close(struct sr_dev_inst *sdi)
 	sr_scpi_close(sdi->conn);
 
 	sdi->status = SR_ST_INACTIVE;
-
-	return SR_OK;
-}
-
-static int cleanup(const struct sr_dev_driver *di)
-{
-	dev_clear(di);
 
 	return SR_OK;
 }
@@ -226,8 +207,10 @@ static int config_get(uint32_t key, GVariant **data, const struct sr_dev_inst *s
 	const struct scope_config *model;
 	struct scope_state *state;
 
-	if (!sdi || !(devc = sdi->priv))
+	if (!sdi)
 		return SR_ERR_ARG;
+
+	devc = sdi->priv;
 
 	if ((cg_type = check_channel_group(devc, cg)) == CG_INVALID)
 		return SR_ERR;
@@ -505,7 +488,7 @@ static int config_list(uint32_t key, GVariant **data, const struct sr_dev_inst *
 	struct dev_context *devc = NULL;
 	const struct scope_config *model = NULL;
 
-	/* SR_CONF_SCAN_OPTIONS is always valid, regardless of sdi or probe group. */
+	/* SR_CONF_SCAN_OPTIONS is always valid, regardless of sdi or channel group. */
 	if (key == SR_CONF_SCAN_OPTIONS) {
 		*data = g_variant_new_fixed_array(G_VARIANT_TYPE_UINT32,
 				dlm_scanopts, ARRAY_SIZE(dlm_scanopts), sizeof(uint32_t));
@@ -527,7 +510,7 @@ static int config_list(uint32_t key, GVariant **data, const struct sr_dev_inst *
 
 	/*
 	 * If cg is NULL, only the SR_CONF_DEVICE_OPTIONS that are not
-	 * specific to a probe group must be returned.
+	 * specific to a channel group must be returned.
 	 */
 	if (!cg) {
 		switch (key) {
@@ -621,15 +604,13 @@ static int dlm_check_channels(GSList *channels)
 	return SR_OK;
 }
 
-static int dev_acquisition_start(const struct sr_dev_inst *sdi, void *cb_data)
+static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 {
 	GSList *l;
 	gboolean digital_added;
 	struct sr_channel *ch;
 	struct dev_context *devc;
 	struct sr_scpi_dev_inst *scpi;
-
-	(void)cb_data;
 
 	if (sdi->status != SR_ST_ACTIVE)
 		return SR_ERR_DEV_CLOSED;
@@ -673,16 +654,11 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi, void *cb_data)
 	return SR_OK;
 }
 
-static int dev_acquisition_stop(struct sr_dev_inst *sdi, void *cb_data)
+static int dev_acquisition_stop(struct sr_dev_inst *sdi)
 {
 	struct dev_context *devc;
-	struct sr_datafeed_packet packet;
 
-	(void)cb_data;
-
-	packet.type = SR_DF_END;
-	packet.payload = NULL;
-	sr_session_send(sdi, &packet);
+	std_session_send_df_end(sdi);
 
 	if (sdi->status != SR_ST_ACTIVE)
 		return SR_ERR_DEV_CLOSED;
@@ -698,14 +674,14 @@ static int dev_acquisition_stop(struct sr_dev_inst *sdi, void *cb_data)
 	return SR_OK;
 }
 
-SR_PRIV struct sr_dev_driver yokogawa_dlm_driver_info = {
+static struct sr_dev_driver yokogawa_dlm_driver_info = {
 	.name = "yokogawa-dlm",
 	.longname = "Yokogawa DL/DLM",
 	.api_version = 1,
-	.init = init,
-	.cleanup = cleanup,
+	.init = std_init,
+	.cleanup = std_cleanup,
 	.scan = scan,
-	.dev_list = dev_list,
+	.dev_list = std_dev_list,
 	.dev_clear = dev_clear,
 	.config_get = config_get,
 	.config_set = config_set,
@@ -717,3 +693,4 @@ SR_PRIV struct sr_dev_driver yokogawa_dlm_driver_info = {
 	.dev_acquisition_stop = dev_acquisition_stop,
 	.context = NULL,
 };
+SR_REGISTER_DEV_DRIVER(yokogawa_dlm_driver_info);

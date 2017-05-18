@@ -560,6 +560,27 @@ SR_API int sr_input_end(const struct sr_input *in)
 }
 
 /**
+ * Reset the input module's input handling structures.
+ *
+ * Causes the input module to reset its internal state so that we can re-send
+ * the input data from the beginning without having to re-create the entire
+ * input module.
+ *
+ * @since 0.5.0
+ */
+SR_API int sr_input_reset(const struct sr_input *in)
+{
+	if (!in->module->reset) {
+		sr_spew("Tried to reset %s module but no reset handler found.",
+			in->module->id);
+		return SR_OK;
+	}
+
+	sr_spew("Resetting %s module.", in->module->id);
+	return in->module->reset((struct sr_input *)in);
+}
+
+/**
  * Free the specified input instance and all associated resources.
  *
  * @since 0.4.0
@@ -571,8 +592,7 @@ SR_API void sr_input_free(const struct sr_input *in)
 
 	if (in->module->cleanup)
 		in->module->cleanup((struct sr_input *)in);
-	if (in->sdi)
-		sr_dev_inst_free(in->sdi);
+	sr_dev_inst_free(in->sdi);
 	if (in->buf->len > 64) {
 		/* That seems more than just some sub-unitsize leftover... */
 		sr_warn("Found %" G_GSIZE_FORMAT

@@ -14,8 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef LIBSIGROK_HARDWARE_UNI_T_DMM_PROTOCOL_H
@@ -37,8 +36,8 @@ struct dmm_info {
 	int packet_size;
 	gboolean (*packet_valid)(const uint8_t *);
 	int (*packet_parse)(const uint8_t *, float *,
-			    struct sr_datafeed_analog_old *, void *);
-	void (*dmm_details)(struct sr_datafeed_analog_old *, void *);
+			    struct sr_datafeed_analog *, void *);
+	void (*dmm_details)(struct sr_datafeed_analog *, void *);
 	gsize info_size;
 };
 
@@ -48,19 +47,7 @@ struct dmm_info {
 
 /** Private, per-device-instance driver context. */
 struct dev_context {
-	/** The current sampling limit (in number of samples). */
-	uint64_t limit_samples;
-
-	/** The current sampling limit (in ms). */
-	uint64_t limit_msec;
-
-	/** Opaque pointer passed in by the frontend. */
-	void *cb_data;
-
-	/** The current number of already received samples. */
-	uint64_t num_samples;
-
-	int64_t starttime;
+	struct sr_sw_limits limits;
 
 	gboolean first_run;
 

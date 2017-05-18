@@ -365,8 +365,7 @@ SR_API int sr_session_dev_add(struct sr_session *session,
 			       sr_strerror(ret));
 			return ret;
 		}
-		if ((ret = sdi->driver->dev_acquisition_start(sdi,
-					sdi)) != SR_OK) {
+		if ((ret = sdi->driver->dev_acquisition_start(sdi)) != SR_OK) {
 			sr_err("Failed to start acquisition of device in "
 			       "running session (%s)", sr_strerror(ret));
 			return ret;
@@ -812,8 +811,12 @@ SR_API int sr_session_start(struct sr_session *session)
 
 	/* Have all devices start acquisition. */
 	for (l = session->devs; l; l = l->next) {
-		sdi = l->data;
-		ret = sdi->driver->dev_acquisition_start(sdi, sdi);
+		if (!(sdi = l->data)) {
+			sr_err("Device sdi was NULL, can't start session.");
+			ret = SR_ERR;
+			break;
+		}
+		ret = sdi->driver->dev_acquisition_start(sdi);
 		if (ret != SR_OK) {
 			sr_err("Could not start %s device %s acquisition.",
 				sdi->driver->name, sdi->connection_id);
@@ -827,8 +830,7 @@ SR_API int sr_session_start(struct sr_session *session)
 		lend = l->next;
 		for (l = session->devs; l != lend; l = l->next) {
 			sdi = l->data;
-			if (sdi->driver->dev_acquisition_stop)
-				sdi->driver->dev_acquisition_stop(sdi, sdi);
+			sdi->driver->dev_acquisition_stop(sdi);
 		}
 		/* TODO: Handle delayed stops. Need to iterate the event
 		 * sources... */
@@ -912,7 +914,7 @@ static gboolean session_stop_sync(void *user_data)
 	for (node = session->devs; node; node = node->next) {
 		sdi = node->data;
 		if (sdi->driver && sdi->driver->dev_acquisition_stop)
-			sdi->driver->dev_acquisition_stop(sdi, sdi);
+			sdi->driver->dev_acquisition_stop(sdi);
 	}
 
 	return G_SOURCE_REMOVE;
@@ -1032,7 +1034,6 @@ SR_API int sr_session_stopped_callback_set(struct sr_session *session,
 static void datafeed_dump(const struct sr_datafeed_packet *packet)
 {
 	const struct sr_datafeed_logic *logic;
-	const struct sr_datafeed_analog_old *analog_old;
 	const struct sr_datafeed_analog *analog;
 
 	/* Please use the same order as in libsigrok.h. */
@@ -1053,11 +1054,6 @@ static void datafeed_dump(const struct sr_datafeed_packet *packet)
 		logic = packet->payload;
 		sr_dbg("bus: Received SR_DF_LOGIC packet (%" PRIu64 " bytes, "
 		       "unitsize = %d).", logic->length, logic->unitsize);
-		break;
-	case SR_DF_ANALOG_OLD:
-		analog_old = packet->payload;
-		sr_dbg("bus: Received SR_DF_ANALOG_OLD packet (%d samples).",
-		       analog_old->num_samples);
 		break;
 	case SR_DF_FRAME_BEGIN:
 		sr_dbg("bus: Received SR_DF_FRAME_BEGIN packet.");
@@ -1111,43 +1107,6 @@ SR_PRIV int sr_session_send(const struct sr_dev_inst *sdi,
 	if (!sdi->session) {
 		sr_err("%s: session was NULL", __func__);
 		return SR_ERR_BUG;
-	}
-
-	if (packet->type == SR_DF_ANALOG_OLD) {
-		/* Convert to SR_DF_ANALOG. */
-		const struct sr_datafeed_analog_old *analog_old = packet->payload;
-		struct sr_analog_encoding encoding;
-		struct sr_analog_meaning meaning;
-		struct sr_analog_spec spec;
-		struct sr_datafeed_analog analog;
-		struct sr_datafeed_packet new_packet;
-		new_packet.type = SR_DF_ANALOG;
-		new_packet.payload = &analog;
-		analog.data = analog_old->data;
-		analog.num_samples = analog_old->num_samples;
-		analog.encoding = &encoding;
-		analog.meaning = &meaning;
-		analog.spec = &spec;
-		encoding.unitsize = sizeof(float);
-		encoding.is_signed = TRUE;
-		encoding.is_float = TRUE;
-#ifdef WORDS_BIGENDIAN
-		encoding.is_bigendian = TRUE;
-#else
-		encoding.is_bigendian = FALSE;
-#endif
-		encoding.digits = 0;
-		encoding.is_digits_decimal = FALSE;
-		encoding.scale.p = 1;
-		encoding.scale.q = 1;
-		encoding.offset.p = 0;
-		encoding.offset.q = 1;
-		meaning.mq = analog_old->mq;
-		meaning.unit = analog_old->unit;
-		meaning.mqflags = analog_old->mqflags;
-		meaning.channels = analog_old->channels;
-		spec.spec_digits = 0;
-		return sr_session_send(sdi, &new_packet);
 	}
 
 	/*
@@ -1498,8 +1457,6 @@ SR_PRIV int sr_packet_copy(const struct sr_datafeed_packet *packet,
 	struct sr_datafeed_meta *meta_copy;
 	const struct sr_datafeed_logic *logic;
 	struct sr_datafeed_logic *logic_copy;
-	const struct sr_datafeed_analog_old *analog_old;
-	struct sr_datafeed_analog_old *analog_old_copy;
 	const struct sr_datafeed_analog *analog;
 	struct sr_datafeed_analog *analog_copy;
 	uint8_t *payload;
@@ -1531,19 +1488,6 @@ SR_PRIV int sr_packet_copy(const struct sr_datafeed_packet *packet,
 		memcpy(logic_copy->data, logic->data, logic->length * logic->unitsize);
 		(*copy)->payload = logic_copy;
 		break;
-	case SR_DF_ANALOG_OLD:
-		analog_old = packet->payload;
-		analog_old_copy = g_malloc(sizeof(*analog_old_copy));
-		analog_old_copy->channels = g_slist_copy(analog_old->channels);
-		analog_old_copy->num_samples = analog_old->num_samples;
-		analog_old_copy->mq = analog_old->mq;
-		analog_old_copy->unit = analog_old->unit;
-		analog_old_copy->mqflags = analog_old->mqflags;
-		analog_old_copy->data = g_malloc(analog_old->num_samples * sizeof(float));
-		memcpy(analog_old_copy->data, analog_old->data,
-				analog_old->num_samples * sizeof(float));
-		(*copy)->payload = analog_old_copy;
-		break;
 	case SR_DF_ANALOG:
 		analog = packet->payload;
 		analog_copy = g_malloc(sizeof(*analog_copy));
@@ -1574,7 +1518,6 @@ void sr_packet_free(struct sr_datafeed_packet *packet)
 {
 	const struct sr_datafeed_meta *meta;
 	const struct sr_datafeed_logic *logic;
-	const struct sr_datafeed_analog_old *analog_old;
 	const struct sr_datafeed_analog *analog;
 	struct sr_config *src;
 	GSList *l;
@@ -1601,12 +1544,6 @@ void sr_packet_free(struct sr_datafeed_packet *packet)
 	case SR_DF_LOGIC:
 		logic = packet->payload;
 		g_free(logic->data);
-		g_free((void *)packet->payload);
-		break;
-	case SR_DF_ANALOG_OLD:
-		analog_old = packet->payload;
-		g_slist_free(analog_old->channels);
-		g_free(analog_old->data);
 		g_free((void *)packet->payload);
 		break;
 	case SR_DF_ANALOG:

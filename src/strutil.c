@@ -14,8 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <config.h>
@@ -212,6 +211,78 @@ SR_PRIV int sr_atof_ascii(const char *str, float *ret)
 }
 
 /**
+ * Convert a string representation of a numeric value to a sr_rational.
+ *
+ * The conversion is strict and will fail if the complete string does not
+ * represent a valid number. The function sets errno according to the details
+ * of the failure. This version ignores the locale.
+ *
+ * @param str The string representation to convert.
+ * @param ret Pointer to sr_rational where the result of the conversion will be stored.
+ *
+ * @retval SR_OK Conversion successful.
+ * @retval SR_ERR Failure.
+ *
+ * @since 0.5.0
+ */
+SR_API int sr_parse_rational(const char *str, struct sr_rational *ret)
+{
+	char *endptr = NULL;
+	int64_t integral;
+	int64_t fractional = 0;
+	int64_t denominator = 1;
+	int32_t fractional_len = 0;
+	int32_t exponent = 0;
+
+	errno = 0;
+	integral = g_ascii_strtoll(str, &endptr, 10);
+
+	if (errno)
+		return SR_ERR;
+
+	if (*endptr == '.') {
+		const char* start = endptr + 1;
+		fractional = g_ascii_strtoll(start, &endptr, 10);
+		if (errno)
+			return SR_ERR;
+		fractional_len = endptr - start;
+	}
+
+	if ((*endptr == 'E') || (*endptr == 'e')) {
+		exponent = g_ascii_strtoll(endptr + 1, &endptr, 10);
+		if (errno)
+			return SR_ERR;
+	}
+
+	if (*endptr != '\0')
+		return SR_ERR;
+
+	for (int i = 0; i < fractional_len; i++)
+		integral *= 10;
+	exponent -= fractional_len;
+
+	if (integral >= 0)
+		integral += fractional;
+	else
+		integral -= fractional;
+
+	while (exponent > 0) {
+		integral *= 10;
+		exponent--;
+	}
+
+	while (exponent < 0) {
+		denominator *= 10;
+		exponent++;
+	}
+
+	ret->p = integral;
+	ret->q = denominator;
+
+	return SR_OK;
+}
+
+/**
  * Convert a numeric value value to its "natural" string representation
  * in SI units.
  *
@@ -276,35 +347,53 @@ SR_API char *sr_samplerate_string(uint64_t samplerate)
 }
 
 /**
- * Convert a numeric frequency value to the "natural" string representation
- * of its period.
+ * Convert a numeric period value to the "natural" string representation
+ * of its period value.
  *
- * E.g. a value of 3000000 would be converted to "3 us", 20000 to "50 ms".
+ * The period is specified as a rational number's numerator and denominator.
  *
- * @param frequency The frequency in Hz.
+ * E.g. a pair of (1, 5) would be converted to "200 ms", (10, 100) to "100 ms".
  *
- * @return A newly allocated string representation of the frequency value,
+ * @param v_p The period numerator.
+ * @param v_q The period denominator.
+ *
+ * @return A newly allocated string representation of the period value,
  *         or NULL upon errors. The caller is responsible to g_free() the
  *         memory.
  *
- * @since 0.1.0
+ * @since 0.5.0
  */
-SR_API char *sr_period_string(uint64_t frequency)
+SR_API char *sr_period_string(uint64_t v_p, uint64_t v_q)
 {
+	double freq, v;
 	char *o;
-	int r;
+	int prec, r;
 
-	/* Allocate enough for a uint64_t as string + " ms". */
+	freq = 1 / ((double)v_p / v_q);
+
 	o = g_malloc0(30 + 1);
 
-	if (frequency >= SR_GHZ(1))
-		r = snprintf(o, 30, "%" PRIu64 " ns", frequency / 1000000000);
-	else if (frequency >= SR_MHZ(1))
-		r = snprintf(o, 30, "%" PRIu64 " us", frequency / 1000000);
-	else if (frequency >= SR_KHZ(1))
-		r = snprintf(o, 30, "%" PRIu64 " ms", frequency / 1000);
-	else
-		r = snprintf(o, 30, "%" PRIu64 " s", frequency);
+	if (freq > SR_GHZ(1)) {
+		v = (double)v_p / v_q * 1000000000000.0;
+		prec = ((v - (uint64_t)v) < FLT_MIN) ? 0 : 3;
+		r = snprintf(o, 30, "%.*f ps", prec, v);
+	} else if (freq > SR_MHZ(1)) {
+		v = (double)v_p / v_q * 1000000000.0;
+		prec = ((v - (uint64_t)v) < FLT_MIN) ? 0 : 3;
+		r = snprintf(o, 30, "%.*f ns", prec, v);
+	} else if (freq > SR_KHZ(1)) {
+		v = (double)v_p / v_q * 1000000.0;
+		prec = ((v - (uint64_t)v) < FLT_MIN) ? 0 : 3;
+		r = snprintf(o, 30, "%.*f us", prec, v);
+	} else if (freq > 1) {
+		v = (double)v_p / v_q * 1000.0;
+		prec = ((v - (uint64_t)v) < FLT_MIN) ? 0 : 3;
+		r = snprintf(o, 30, "%.*f ms", prec, v);
+	} else {
+		v = (double)v_p / v_q;
+		prec = ((v - (uint64_t)v) < FLT_MIN) ? 0 : 3;
+		r = snprintf(o, 30, "%.*f s", prec, v);
+	}
 
 	if (r < 0) {
 		/* Something went wrong... */

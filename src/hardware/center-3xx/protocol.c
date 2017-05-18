@@ -14,8 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <config.h>
@@ -25,6 +24,7 @@
 
 struct center_info {
 	float temp[NUM_CHANNELS];
+	int digits[NUM_CHANNELS];
 	gboolean rec, std, max, min, maxmin, t1t2, rel, hold, lowbat, celsius;
 	gboolean memfull, autooff;
 	gboolean mode_std, mode_rel, mode_max, mode_min, mode_maxmin;
@@ -97,8 +97,12 @@ static int packet_parse(const uint8_t *buf, int idx, struct center_info *info)
 	/* Byte 43: Specifies whether we need to divide the value(s) by 10. */
 	for (i = 0; i < NUM_CHANNELS; i++) {
 		/* Bit = 0: Divide by 10. Bit = 1: Don't divide by 10. */
-		if ((buf[43] & (1 << i)) == 0)
+		if ((buf[43] & (1 << i)) == 0) {
 			info->temp[i] /= 10;
+			info->digits[i] = 1;
+		} else {
+			info->digits[i] = 0;
+		}
 	}
 
 	/* Bytes 39-42: Overflow/overlimit bits, depending on mode. */
@@ -123,7 +127,10 @@ static int packet_parse(const uint8_t *buf, int idx, struct center_info *info)
 static int handle_packet(const uint8_t *buf, struct sr_dev_inst *sdi, int idx)
 {
 	struct sr_datafeed_packet packet;
-	struct sr_datafeed_analog_old analog;
+	struct sr_datafeed_analog analog;
+	struct sr_analog_encoding encoding;
+	struct sr_analog_meaning meaning;
+	struct sr_analog_spec spec;
 	struct dev_context *devc;
 	struct center_info info;
 	GSList *l;
@@ -131,7 +138,8 @@ static int handle_packet(const uint8_t *buf, struct sr_dev_inst *sdi, int idx)
 
 	devc = sdi->priv;
 
-	memset(&analog, 0, sizeof(struct sr_datafeed_analog_old));
+	/* Note: digits/spec_digits will be overridden later. */
+	sr_analog_init(&analog, &encoding, &meaning, &spec, 0);
 	memset(&info, 0, sizeof(struct center_info));
 
 	ret = packet_parse(buf, idx, &info);
@@ -141,23 +149,25 @@ static int handle_packet(const uint8_t *buf, struct sr_dev_inst *sdi, int idx)
 	}
 
 	/* Common values for all 4 channels. */
-	packet.type = SR_DF_ANALOG_OLD;
+	packet.type = SR_DF_ANALOG;
 	packet.payload = &analog;
-	analog.mq = SR_MQ_TEMPERATURE;
-	analog.unit = (info.celsius) ? SR_UNIT_CELSIUS : SR_UNIT_FAHRENHEIT;
+	analog.meaning->mq = SR_MQ_TEMPERATURE;
+	analog.meaning->unit = (info.celsius) ? SR_UNIT_CELSIUS : SR_UNIT_FAHRENHEIT;
 	analog.num_samples = 1;
 
 	/* Send the values for T1 - T4. */
 	for (i = 0; i < NUM_CHANNELS; i++) {
 		l = NULL;
 		l = g_slist_append(l, g_slist_nth_data(sdi->channels, i));
-		analog.channels = l;
+		analog.meaning->channels = l;
+		analog.encoding->digits = info.digits[i];
+		analog.spec->spec_digits = info.digits[i];
 		analog.data = &(info.temp[i]);
-		sr_session_send(devc->cb_data, &packet);
+		sr_session_send(sdi, &packet);
 		g_slist_free(l);
 	}
 
-	devc->num_samples++;
+	sr_sw_limits_update_samples_read(&devc->sw_limits, 1);
 
 	return SR_OK;
 }
@@ -205,7 +215,6 @@ static int receive_data(int fd, int revents, int idx, void *cb_data)
 {
 	struct sr_dev_inst *sdi;
 	struct dev_context *devc;
-	int64_t t;
 	static gboolean request_new_packet = TRUE;
 	struct sr_serial_dev_inst *serial;
 
@@ -233,20 +242,8 @@ static int receive_data(int fd, int revents, int idx, void *cb_data)
 		}
 	}
 
-	if (devc->limit_samples && devc->num_samples >= devc->limit_samples) {
-		sr_info("Requested number of samples reached.");
-		sdi->driver->dev_acquisition_stop(sdi, cb_data);
-		return TRUE;
-	}
-
-	if (devc->limit_msec) {
-		t = (g_get_monotonic_time() - devc->starttime) / 1000;
-		if (t > (int64_t)devc->limit_msec) {
-			sr_info("Requested time limit reached.");
-			sdi->driver->dev_acquisition_stop(sdi, cb_data);
-			return TRUE;
-		}
-	}
+	if (sr_sw_limits_check(&devc->sw_limits))
+		sdi->driver->dev_acquisition_stop(sdi);
 
 	return TRUE;
 }

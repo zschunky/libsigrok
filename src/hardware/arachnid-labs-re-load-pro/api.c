@@ -14,8 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <config.h>
@@ -37,7 +36,7 @@ static const uint32_t drvopts[] = {
 };
 
 static const uint32_t devopts[] = {
-	SR_CONF_CONTINUOUS | SR_CONF_SET,
+	SR_CONF_CONTINUOUS,
 	SR_CONF_LIMIT_SAMPLES | SR_CONF_GET | SR_CONF_SET,
 	SR_CONF_LIMIT_MSEC | SR_CONF_GET | SR_CONF_SET,
 };
@@ -56,32 +55,20 @@ static const uint32_t devopts_cg[] = {
 	SR_CONF_UNDER_VOLTAGE_CONDITION_ACTIVE | SR_CONF_GET,
 };
 
-SR_PRIV struct sr_dev_driver arachnid_labs_re_load_pro_driver_info;
-
-static int init(struct sr_dev_driver *di, struct sr_context *sr_ctx)
-{
-	return std_init(sr_ctx, di, LOG_PREFIX);
-}
-
 static GSList *scan(struct sr_dev_driver *di, GSList *options)
 {
 	struct sr_dev_inst *sdi;
-	struct drv_context *drvc;
 	struct dev_context *devc;
 	struct sr_config *src;
 	struct sr_serial_dev_inst *serial;
 	struct sr_channel_group *cg;
 	struct sr_channel *ch;
-	GSList *l, *devices;
+	GSList *l;
 	int ret, len;
 	const char *conn, *serialcomm;
 	char buf[100];
 	char *bufptr;
 	double version;
-
-	devices = NULL;
-	drvc = di->context;
-	drvc->instances = NULL;
 
 	conn = serialcomm = NULL;
 	for (l = options; l; l = l->next) {
@@ -134,11 +121,10 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 	}
 
 	sdi = g_malloc0(sizeof(struct sr_dev_inst));
-	sdi->status = SR_ST_ACTIVE;
+	sdi->status = SR_ST_INACTIVE;
 	sdi->vendor = g_strdup("Arachnid Labs");
 	sdi->model = g_strdup("Re:load Pro");
 	sdi->version = g_strdup(buf + 8);
-	sdi->driver = &arachnid_labs_re_load_pro_driver_info;
 	sdi->inst_type = SR_INST_SERIAL;
 	sdi->conn = serial;
 
@@ -153,30 +139,12 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 	cg->channels = g_slist_append(cg->channels, ch);
 
 	devc = g_malloc0(sizeof(struct dev_context));
+	sr_sw_limits_init(&devc->limits);
 	sdi->priv = devc;
-	drvc->instances = g_slist_append(drvc->instances, sdi);
-	devices = g_slist_append(devices, sdi);
 
 	serial_close(serial);
-	if (!devices)
-		sr_serial_dev_inst_free(serial);
 
-	return devices;
-}
-
-static GSList *dev_list(const struct sr_dev_driver *di)
-{
-	return ((struct drv_context *)(di->context))->instances;
-}
-
-static int dev_clear(const struct sr_dev_driver *di)
-{
-	return std_dev_clear(di, NULL);
-}
-
-static int cleanup(const struct sr_dev_driver *di)
-{
-	return dev_clear(di);
+	return std_scan_complete(di, g_slist_append(NULL, sdi));
 }
 
 static int config_list(uint32_t key, GVariant **data,
@@ -258,11 +226,8 @@ static int config_get(uint32_t key, GVariant **data,
 	ret = SR_OK;
 	switch (key) {
 	case SR_CONF_LIMIT_SAMPLES:
-		*data = g_variant_new_uint64(devc->limit_samples);
-		break;
 	case SR_CONF_LIMIT_MSEC:
-		*data = g_variant_new_uint64(devc->limit_msec);
-		break;
+		return sr_sw_limits_config_get(&devc->limits, key, data);
 	case SR_CONF_REGULATION:
 		*data = g_variant_new_string("CC"); /* Always CC mode. */
 		break;
@@ -321,11 +286,8 @@ static int config_set(uint32_t key, GVariant *data,
 	ret = SR_OK;
 	switch (key) {
 	case SR_CONF_LIMIT_SAMPLES:
-		devc->limit_samples = g_variant_get_uint64(data);
-		break;
 	case SR_CONF_LIMIT_MSEC:
-		devc->limit_msec = g_variant_get_uint64(data);
-		break;
+		return sr_sw_limits_config_set(&devc->limits, key, data);
 	case SR_CONF_ENABLED:
 		ret = reloadpro_set_on_off(sdi, g_variant_get_boolean(data));
 		break;
@@ -340,19 +302,16 @@ static int config_set(uint32_t key, GVariant *data,
 	return ret;
 }
 
-static int dev_acquisition_start(const struct sr_dev_inst *sdi, void *cb_data)
+static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 {
 	int ret;
 	struct dev_context *devc;
 	struct sr_serial_dev_inst *serial;
 
-	(void)cb_data;
-
 	if (sdi->status != SR_ST_ACTIVE)
 		return SR_ERR_DEV_CLOSED;
 
 	devc = sdi->priv;
-
 	serial = sdi->conn;
 
 	/* Send the 'monitor <ms>' command (doesn't have a reply). */
@@ -367,37 +326,30 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi, void *cb_data)
 	serial_source_add(sdi->session, serial, G_IO_IN, 100,
 			  reloadpro_receive_data, (void *)sdi);
 
-	std_session_send_df_header(cb_data, LOG_PREFIX);
+	sr_sw_limits_acquisition_start(&devc->limits);
+	std_session_send_df_header(sdi);
 
 	memset(devc->buf, 0, RELOADPRO_BUFSIZE);
 	devc->buflen = 0;
-	devc->num_samples = 0;
-	devc->starttime = g_get_monotonic_time();
 
 	return SR_OK;
 }
 
-static int dev_acquisition_stop(struct sr_dev_inst *sdi, void *cb_data)
-{
-	return std_serial_dev_acquisition_stop(sdi, cb_data,
-		std_serial_dev_close, sdi->conn, LOG_PREFIX);
-}
-
-SR_PRIV struct sr_dev_driver arachnid_labs_re_load_pro_driver_info = {
+static struct sr_dev_driver arachnid_labs_re_load_pro_driver_info = {
 	.name = "arachnid-labs-re-load-pro",
 	.longname = "Arachnid Labs Re:load Pro",
 	.api_version = 1,
-	.init = init,
-	.cleanup = cleanup,
+	.init = std_init,
+	.cleanup = std_cleanup,
 	.scan = scan,
-	.dev_list = dev_list,
-	.dev_clear = dev_clear,
+	.dev_list = std_dev_list,
 	.config_get = config_get,
 	.config_set = config_set,
 	.config_list = config_list,
 	.dev_open = std_serial_dev_open,
 	.dev_close = std_serial_dev_close,
 	.dev_acquisition_start = dev_acquisition_start,
-	.dev_acquisition_stop = dev_acquisition_stop,
+	.dev_acquisition_stop = std_serial_dev_acquisition_stop,
 	.context = NULL,
 };
+SR_REGISTER_DEV_DRIVER(arachnid_labs_re_load_pro_driver_info);

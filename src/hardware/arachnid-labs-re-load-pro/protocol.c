@@ -14,8 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <config.h>
@@ -218,7 +217,7 @@ static void handle_packet(const struct sr_dev_inst *sdi)
 	packet.payload = NULL;
 	sr_session_send(sdi, &packet);
 
-	devc->num_samples++;
+	sr_sw_limits_update_samples_read(&devc->limits, 1);
 }
 
 static void handle_new_data(const struct sr_dev_inst *sdi)
@@ -252,7 +251,6 @@ SR_PRIV int reloadpro_receive_data(int fd, int revents, void *cb_data)
 {
 	struct sr_dev_inst *sdi;
 	struct dev_context *devc;
-	int64_t t;
 
 	(void)fd;
 
@@ -264,20 +262,8 @@ SR_PRIV int reloadpro_receive_data(int fd, int revents, void *cb_data)
 
 	handle_new_data(sdi);
 
-	if (devc->limit_samples && (devc->num_samples >= devc->limit_samples)) {
-		sr_info("Requested number of samples reached.");
-		sdi->driver->dev_acquisition_stop(sdi, cb_data);
-		return TRUE;
-	}
-
-	if (devc->limit_msec) {
-		t = (g_get_monotonic_time() - devc->starttime) / 1000;
-		if (t > (int64_t)devc->limit_msec) {
-			sr_info("Requested time limit reached.");
-			sdi->driver->dev_acquisition_stop(sdi, cb_data);
-			return TRUE;
-		}
-	}
+	if (sr_sw_limits_check(&devc->limits))
+		sdi->driver->dev_acquisition_stop(sdi);
 
 	return TRUE;
 }

@@ -14,8 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 /**
@@ -43,9 +42,9 @@
 
 /** Parse value from buf, byte 2-8. */
 static int parse_value(const uint8_t *buf, struct metex14_info *info,
-			float *result)
+			float *result, int *exponent)
 {
-	int i, is_ol, cnt;
+	int i, is_ol, cnt, dot_pos;
 	char valstr[7 + 1];
 
 	/* Strip all spaces from bytes 2-8. */
@@ -88,6 +87,12 @@ static int parse_value(const uint8_t *buf, struct metex14_info *info,
 
 	/* Bytes 2-8: Sign, value (up to 5 digits) and decimal point */
 	sscanf((const char *)&valstr, "%f", result);
+
+	dot_pos = strcspn(valstr, ".");
+	if (dot_pos < cnt)
+		*exponent = -(cnt - dot_pos - 1);
+	else
+		*exponent = 0;
 
 	sr_spew("The display value is %f.", *result);
 
@@ -147,17 +152,17 @@ static void parse_flags(const char *buf, struct metex14_info *info)
 		info->is_unitless = TRUE;
 
 	/* Bytes 0-1: Measurement mode, except AC/DC */
-	info->is_resistance  = !strncmp(buf, "OH", 2) ||
+	info->is_resistance = !strncmp(buf, "OH", 2) ||
 		(!strncmp(buf, "  ", 2) && info->is_ohm);
-	info->is_capacity    = !strncmp(buf, "CA", 2) ||
+	info->is_capacity = !strncmp(buf, "CA", 2) ||
 		(!strncmp(buf, "  ", 2) && info->is_farad);
 	info->is_temperature = !strncmp(buf, "TE", 2);
-	info->is_diode       = !strncmp(buf, "DI", 2) ||
+	info->is_diode = !strncmp(buf, "DI", 2) ||
 		(!strncmp(buf, "  ", 2) && info->is_volt && info->is_milli);
-	info->is_frequency   = !strncmp(buf, "FR", 2) ||
+	info->is_frequency = !strncmp(buf, "FR", 2) ||
 		(!strncmp(buf, "  ", 2) && info->is_hertz);
-	info->is_gain        = !strncmp(buf, "DB", 2);
-	info->is_hfe         = !strncmp(buf, "HF", 2) ||
+	info->is_gain = !strncmp(buf, "DB", 2);
+	info->is_hfe = !strncmp(buf, "HF", 2) ||
 		(!strncmp(buf, "  ", 2) && !info->is_volt && !info->is_ohm &&
 		 !info->is_logic && !info->is_farad && !info->is_hertz);
 	/*
@@ -170,72 +175,75 @@ static void parse_flags(const char *buf, struct metex14_info *info)
 	/* Byte 13: Always '\r' (carriage return, 0x0d, 13) */
 }
 
-static void handle_flags(struct sr_datafeed_analog_old *analog, float *floatval,
-			 const struct metex14_info *info)
+static void handle_flags(struct sr_datafeed_analog *analog, float *floatval,
+			 int *exponent, const struct metex14_info *info)
 {
+	int factor = 0;
 	/* Factors */
 	if (info->is_pico)
-		*floatval /= 1000000000000ULL;
+		factor -= 12;
 	if (info->is_nano)
-		*floatval /= 1000000000;
+		factor -= 9;
 	if (info->is_micro)
-		*floatval /= 1000000;
+		factor -= 6;
 	if (info->is_milli)
-		*floatval /= 1000;
+		factor -= 3;
 	if (info->is_kilo)
-		*floatval *= 1000;
+		factor += 3;
 	if (info->is_mega)
-		*floatval *= 1000000;
+		factor += 6;
+	*floatval *= powf(10, factor);
+	*exponent += factor;
 
 	/* Measurement modes */
 	if (info->is_volt) {
-		analog->mq = SR_MQ_VOLTAGE;
-		analog->unit = SR_UNIT_VOLT;
+		analog->meaning->mq = SR_MQ_VOLTAGE;
+		analog->meaning->unit = SR_UNIT_VOLT;
 	}
 	if (info->is_ampere) {
-		analog->mq = SR_MQ_CURRENT;
-		analog->unit = SR_UNIT_AMPERE;
+		analog->meaning->mq = SR_MQ_CURRENT;
+		analog->meaning->unit = SR_UNIT_AMPERE;
 	}
 	if (info->is_ohm) {
-		analog->mq = SR_MQ_RESISTANCE;
-		analog->unit = SR_UNIT_OHM;
+		analog->meaning->mq = SR_MQ_RESISTANCE;
+		analog->meaning->unit = SR_UNIT_OHM;
 	}
 	if (info->is_hertz) {
-		analog->mq = SR_MQ_FREQUENCY;
-		analog->unit = SR_UNIT_HERTZ;
+		analog->meaning->mq = SR_MQ_FREQUENCY;
+		analog->meaning->unit = SR_UNIT_HERTZ;
 	}
 	if (info->is_farad) {
-		analog->mq = SR_MQ_CAPACITANCE;
-		analog->unit = SR_UNIT_FARAD;
+		analog->meaning->mq = SR_MQ_CAPACITANCE;
+		analog->meaning->unit = SR_UNIT_FARAD;
 	}
 	if (info->is_celsius) {
-		analog->mq = SR_MQ_TEMPERATURE;
-		analog->unit = SR_UNIT_CELSIUS;
+		analog->meaning->mq = SR_MQ_TEMPERATURE;
+		analog->meaning->unit = SR_UNIT_CELSIUS;
 	}
 	if (info->is_diode) {
-		analog->mq = SR_MQ_VOLTAGE;
-		analog->unit = SR_UNIT_VOLT;
+		analog->meaning->mq = SR_MQ_VOLTAGE;
+		analog->meaning->unit = SR_UNIT_VOLT;
 	}
 	if (info->is_gain) {
-		analog->mq = SR_MQ_GAIN;
-		analog->unit = SR_UNIT_DECIBEL_VOLT;
+		analog->meaning->mq = SR_MQ_GAIN;
+		analog->meaning->unit = SR_UNIT_DECIBEL_VOLT;
 	}
 	if (info->is_hfe) {
-		analog->mq = SR_MQ_GAIN;
-		analog->unit = SR_UNIT_UNITLESS;
+		analog->meaning->mq = SR_MQ_GAIN;
+		analog->meaning->unit = SR_UNIT_UNITLESS;
 	}
 	if (info->is_logic) {
-		analog->mq = SR_MQ_GAIN;
-		analog->unit = SR_UNIT_UNITLESS;
+		analog->meaning->mq = SR_MQ_GAIN;
+		analog->meaning->unit = SR_UNIT_UNITLESS;
 	}
 
 	/* Measurement related flags */
 	if (info->is_ac)
-		analog->mqflags |= SR_MQFLAG_AC;
+		analog->meaning->mqflags |= SR_MQFLAG_AC;
 	if (info->is_dc)
-		analog->mqflags |= SR_MQFLAG_DC;
+		analog->meaning->mqflags |= SR_MQFLAG_DC;
 	if (info->is_diode)
-		analog->mqflags |= SR_MQFLAG_DIODE;
+		analog->meaning->mqflags |= SR_MQFLAG_DIODE;
 }
 
 static gboolean flags_valid(const struct metex14_info *info)
@@ -311,7 +319,7 @@ SR_PRIV gboolean sr_metex14_packet_valid(const uint8_t *buf)
  * @param buf Buffer containing the protocol packet. Must not be NULL.
  * @param floatval Pointer to a float variable. That variable will be modified
  *                 in-place depending on the protocol packet. Must not be NULL.
- * @param analog Pointer to a struct sr_datafeed_analog_old. The struct will be
+ * @param analog Pointer to a struct sr_datafeed_analog. The struct will be
  *               filled with data according to the protocol packet.
  *               Must not be NULL.
  * @param info Pointer to a struct metex14_info. The struct will be filled
@@ -321,9 +329,9 @@ SR_PRIV gboolean sr_metex14_packet_valid(const uint8_t *buf)
  *         'analog' variable contents are undefined and should not be used.
  */
 SR_PRIV int sr_metex14_parse(const uint8_t *buf, float *floatval,
-			     struct sr_datafeed_analog_old *analog, void *info)
+			     struct sr_datafeed_analog *analog, void *info)
 {
-	int ret;
+	int ret, exponent = 0;
 	struct metex14_info *info_local;
 
 	info_local = (struct metex14_info *)info;
@@ -333,13 +341,16 @@ SR_PRIV int sr_metex14_parse(const uint8_t *buf, float *floatval,
 
 	memset(info_local, 0x00, sizeof(struct metex14_info));
 
-	if ((ret = parse_value(buf, info_local, floatval)) != SR_OK) {
+	if ((ret = parse_value(buf, info_local, floatval, &exponent)) != SR_OK) {
 		sr_dbg("Error parsing value: %d.", ret);
 		return ret;
 	}
 
 	parse_flags((const char *)buf, info_local);
-	handle_flags(analog, floatval, info_local);
+	handle_flags(analog, floatval, &exponent, info_local);
+
+	analog->encoding->digits = -exponent;
+	analog->spec->spec_digits = -exponent;
 
 	return SR_OK;
 }

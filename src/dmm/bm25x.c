@@ -94,36 +94,31 @@ static int decode_point(const uint8_t *buf)
 	return p;
 }
 
-static float scale_value(float val, int point, int digits)
+static int decode_scale(int point, int digits)
 {
 	int pos;
 
 	pos = point ? point + digits - MAX_DIGITS : 0;
 
-	switch (pos) {
-	case 0: return val;
-	case 1: return val * 1e-1;
-	case 2: return val * 1e-2;
-	case 3: return val * 1e-3;
+	if (pos < 0 || pos > 3) {
+		sr_dbg("Invalid decimal point %d (%d digits).", point, digits);
+		return 0;
 	}
-
-	sr_dbg("Invalid decimal point %d (%d digits).", point, digits);
-
-	return NAN;
+	return -pos;
 }
 
-static float decode_prefix(const uint8_t *buf)
+static int decode_prefix(const uint8_t *buf)
 {
-	if (buf[11] & 2) return 1e+6;
-	if (buf[11] & 1) return 1e+3;
-	if (buf[13] & 1) return 1e-3;
-	if (buf[13] & 2) return 1e-6;
-	if (buf[12] & 1) return 1e-9;
+	if (buf[11] & 2) return  6;
+	if (buf[11] & 1) return  3;
+	if (buf[13] & 1) return -3;
+	if (buf[13] & 2) return -6;
+	if (buf[12] & 1) return -9;
 
-	return 1.0f;
+	return 0;
 }
 
-static float decode_value(const uint8_t *buf)
+static float decode_value(const uint8_t *buf, int *exponent)
 {
 	float val = 0.0f;
 	int i, digit;
@@ -137,7 +132,8 @@ static float decode_value(const uint8_t *buf)
 		val = 10.0 * val + digit;
 	}
 
-	return scale_value(val, decode_point(buf), i);
+	*exponent = decode_scale(decode_point(buf), i);
+	return val;
 
 special:
 	if (decode_digit(1, buf) == 0 && decode_digit(2, buf) == 'L')
@@ -147,69 +143,74 @@ special:
 }
 
 SR_PRIV int sr_brymen_bm25x_parse(const uint8_t *buf, float *floatval,
-				struct sr_datafeed_analog_old *analog, void *info)
+				struct sr_datafeed_analog *analog, void *info)
 {
+	int exponent = 0;
 	float val;
 
 	(void)info;
 
-	analog->mq = SR_MQ_GAIN;
-	analog->unit = SR_UNIT_UNITLESS;
-	analog->mqflags = 0;
+	analog->meaning->mq = SR_MQ_GAIN;
+	analog->meaning->unit = SR_UNIT_UNITLESS;
+	analog->meaning->mqflags = 0;
 
 	if (buf[1] & 8)
-		analog->mqflags |= SR_MQFLAG_AUTORANGE;
+		analog->meaning->mqflags |= SR_MQFLAG_AUTORANGE;
 	if (buf[1] & 4)
-		analog->mqflags |= SR_MQFLAG_DC;
+		analog->meaning->mqflags |= SR_MQFLAG_DC;
 	if (buf[1] & 2)
-		analog->mqflags |= SR_MQFLAG_AC;
+		analog->meaning->mqflags |= SR_MQFLAG_AC;
 	if (buf[1] & 1)
-		analog->mqflags |= SR_MQFLAG_RELATIVE;
+		analog->meaning->mqflags |= SR_MQFLAG_RELATIVE;
 	if (buf[11] & 8)
-		analog->mqflags |= SR_MQFLAG_HOLD;
+		analog->meaning->mqflags |= SR_MQFLAG_HOLD;
 	if (buf[13] & 8)
-		analog->mqflags |= SR_MQFLAG_MAX;
+		analog->meaning->mqflags |= SR_MQFLAG_MAX;
 	if (buf[14] & 8)
-		analog->mqflags |= SR_MQFLAG_MIN;
+		analog->meaning->mqflags |= SR_MQFLAG_MIN;
 
 	if (buf[14] & 4) {
-		analog->mq = SR_MQ_VOLTAGE;
-		analog->unit = SR_UNIT_VOLT;
-		if ((analog->mqflags & (SR_MQFLAG_DC | SR_MQFLAG_AC)) == 0)
-			analog->mqflags |= SR_MQFLAG_DIODE;
+		analog->meaning->mq = SR_MQ_VOLTAGE;
+		analog->meaning->unit = SR_UNIT_VOLT;
+		if ((analog->meaning->mqflags & (SR_MQFLAG_DC | SR_MQFLAG_AC)) == 0)
+			analog->meaning->mqflags |= SR_MQFLAG_DIODE;
 	}
 	if (buf[14] & 2) {
-		analog->mq = SR_MQ_CURRENT;
-		analog->unit = SR_UNIT_AMPERE;
+		analog->meaning->mq = SR_MQ_CURRENT;
+		analog->meaning->unit = SR_UNIT_AMPERE;
 	}
 	if (buf[12] & 4) {
-		analog->mq = SR_MQ_RESISTANCE;
-		analog->unit = SR_UNIT_OHM;
+		analog->meaning->mq = SR_MQ_RESISTANCE;
+		analog->meaning->unit = SR_UNIT_OHM;
 	}
 	if (buf[13] & 4) {
-		analog->mq = SR_MQ_CAPACITANCE;
-		analog->unit = SR_UNIT_FARAD;
+		analog->meaning->mq = SR_MQ_CAPACITANCE;
+		analog->meaning->unit = SR_UNIT_FARAD;
 	}
 	if (buf[12] & 2) {
-		analog->mq = SR_MQ_FREQUENCY;
-		analog->unit = SR_UNIT_HERTZ;
+		analog->meaning->mq = SR_MQ_FREQUENCY;
+		analog->meaning->unit = SR_UNIT_HERTZ;
 	}
 
 	if (decode_digit(3, buf) == 'C') {
-		analog->mq = SR_MQ_TEMPERATURE;
-		analog->unit = SR_UNIT_CELSIUS;
+		analog->meaning->mq = SR_MQ_TEMPERATURE;
+		analog->meaning->unit = SR_UNIT_CELSIUS;
 	}
 	if (decode_digit(3, buf) == 'F') {
-		analog->mq = SR_MQ_TEMPERATURE;
-		analog->unit = SR_UNIT_FAHRENHEIT;
+		analog->meaning->mq = SR_MQ_TEMPERATURE;
+		analog->meaning->unit = SR_UNIT_FAHRENHEIT;
 	}
 
-	val = decode_value(buf) * decode_prefix(buf);
+	val = decode_value(buf, &exponent);
+	exponent += decode_prefix(buf);
+	val *= powf(10, exponent);
 
 	if (buf[3] & 1)
 		val = -val;
 
 	*floatval = val;
+	analog->encoding->digits = -exponent;
+	analog->spec->spec_digits = -exponent;
 
 	return SR_OK;
 }

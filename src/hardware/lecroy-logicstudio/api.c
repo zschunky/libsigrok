@@ -71,16 +71,8 @@ static const uint64_t samplerates[] = {
 	SR_MHZ(500),
 };
 
-SR_PRIV struct sr_dev_driver lecroy_logicstudio_driver_info;
-
-static int init(struct sr_dev_driver *di, struct sr_context *sr_ctx)
-{
-	return std_init(sr_ctx, di, LOG_PREFIX);
-}
-
-static struct sr_dev_inst *create_device(struct sr_dev_driver *di,
-		struct sr_usb_dev_inst *usb, enum sr_dev_inst_status status,
-		int64_t fw_updated)
+static struct sr_dev_inst *create_device(struct sr_usb_dev_inst *usb,
+		enum sr_dev_inst_status status, int64_t fw_updated)
 {
 	struct sr_dev_inst *sdi;
 	struct dev_context *devc;
@@ -91,7 +83,6 @@ static struct sr_dev_inst *create_device(struct sr_dev_driver *di,
 	sdi->status = status;
 	sdi->vendor = g_strdup("LeCroy");
 	sdi->model = g_strdup("LogicStudio16");
-	sdi->driver = di;
 	sdi->inst_type = SR_INST_USB;
 	sdi->conn = usb;
 
@@ -127,7 +118,6 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 	(void)options;
 
 	drvc = di->context;
-	drvc->instances = NULL;
 
 	devices = NULL;
 
@@ -148,7 +138,7 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 			usb = sr_usb_dev_inst_new(libusb_get_bus_number(devlist[i]),
 				libusb_get_device_address(devlist[i]), NULL);
 
-			sdi = create_device(di, usb, SR_ST_INACTIVE, 0);
+			sdi = create_device(usb, SR_ST_INACTIVE, 0);
 			break;
 		case LOGICSTUDIO16_PID_LACK_FIRMWARE:
 			r = ezusb_upload_firmware(drvc->sr_ctx, devlist[i],
@@ -169,7 +159,7 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 			usb = sr_usb_dev_inst_new(libusb_get_bus_number(devlist[i]),
 				UNKNOWN_ADDRESS, NULL);
 
-			sdi = create_device(di, usb, SR_ST_INITIALIZING,
+			sdi = create_device(usb, SR_ST_INITIALIZING,
 				g_get_monotonic_time());
 			break;
 		default:
@@ -182,23 +172,12 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 
 		sdi->connection_id = g_strdup(connection_id);
 
-		drvc->instances = g_slist_append(drvc->instances, sdi);
 		devices = g_slist_append(devices, sdi);
 	}
 
 	libusb_free_device_list(devlist, 1);
 
-	return devices;
-}
-
-static GSList *dev_list(const struct sr_dev_driver *di)
-{
-	return ((struct drv_context *)(di->context))->instances;
-}
-
-static int dev_clear(const struct sr_dev_driver *di)
-{
-	return std_dev_clear(di, NULL);
+	return std_scan_complete(di, devices);
 }
 
 static int open_device(struct sr_dev_inst *sdi)
@@ -273,18 +252,11 @@ static int open_device(struct sr_dev_inst *sdi)
 
 static int dev_open(struct sr_dev_inst *sdi)
 {
-	struct drv_context *drvc;
 	struct dev_context *devc;
 	int64_t timediff_us, timediff_ms;
 	int ret;
 
-	drvc = sdi->driver->context;
 	devc = sdi->priv;
-
-	if (!drvc) {
-		sr_err("Driver was not initialized.");
-		return SR_ERR;
-	}
 
 	/*
 	 * If we didn't need to upload FX2 firmware in scan(), open the device
@@ -378,20 +350,6 @@ static int dev_close(struct sr_dev_inst *sdi)
 	sdi->status = SR_ST_INACTIVE;
 
 	return SR_OK;
-}
-
-static int cleanup(const struct sr_dev_driver *di)
-{
-	struct drv_context *drvc;
-	int ret;
-
-	drvc = di->context;
-
-	ret = dev_clear(di);
-
-	g_free(drvc);
-
-	return ret;
 }
 
 static int config_get(uint32_t key, GVariant **data,
@@ -498,7 +456,7 @@ static int receive_usb_data(int fd, int revents, void *cb_data)
 	(void)fd;
 	(void)revents;
 
-	drvc = (struct drv_context *) cb_data;
+	drvc = (struct drv_context *)cb_data;
 
 	tv.tv_sec = 0;
 	tv.tv_usec = 0;
@@ -509,7 +467,7 @@ static int receive_usb_data(int fd, int revents, void *cb_data)
 	return TRUE;
 }
 
-static int dev_acquisition_start(const struct sr_dev_inst *sdi, void *cb_data)
+static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 {
 	struct drv_context *drvc;
 	int ret;
@@ -522,31 +480,28 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi, void *cb_data)
 	if ((ret = lls_start_acquisition(sdi)) < 0)
 		return ret;
 
-	std_session_send_df_header(cb_data, LOG_PREFIX);
+	std_session_send_df_header(sdi);
 
 	return usb_source_add(sdi->session, drvc->sr_ctx, 100,
 		receive_usb_data, drvc);
 }
 
-static int dev_acquisition_stop(struct sr_dev_inst *sdi, void *cb_data)
+static int dev_acquisition_stop(struct sr_dev_inst *sdi)
 {
-	(void)cb_data;
-
 	if (sdi->status != SR_ST_ACTIVE)
 		return SR_ERR_DEV_CLOSED;
 
 	return lls_stop_acquisition(sdi);
 }
 
-SR_PRIV struct sr_dev_driver lecroy_logicstudio_driver_info = {
+static struct sr_dev_driver lecroy_logicstudio_driver_info = {
 	.name = "lecroy-logicstudio",
 	.longname = "LeCroy LogicStudio",
 	.api_version = 1,
-	.init = init,
-	.cleanup = cleanup,
+	.init = std_init,
+	.cleanup = std_cleanup,
 	.scan = scan,
-	.dev_list = dev_list,
-	.dev_clear = dev_clear,
+	.dev_list = std_dev_list,
 	.config_get = config_get,
 	.config_set = config_set,
 	.config_list = config_list,
@@ -557,3 +512,4 @@ SR_PRIV struct sr_dev_driver lecroy_logicstudio_driver_info = {
 	.dev_acquisition_stop = dev_acquisition_stop,
 	.context = NULL,
 };
+SR_REGISTER_DEV_DRIVER(lecroy_logicstudio_driver_info);

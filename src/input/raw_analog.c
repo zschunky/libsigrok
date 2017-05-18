@@ -31,9 +31,9 @@
 #define LOG_PREFIX "input/raw_analog"
 
 /* How many bytes at a time to process and send to the session bus. */
-#define CHUNK_SIZE 4096
-#define DEFAULT_NUM_CHANNELS  1
-#define DEFAULT_SAMPLERATE    0
+#define CHUNK_SIZE		4096
+#define DEFAULT_NUM_CHANNELS	1
+#define DEFAULT_SAMPLERATE	0
 
 struct context {
 	gboolean started;
@@ -48,11 +48,11 @@ struct context {
 };
 
 struct sample_format {
-	const char const *fmt_name;
+	const char *fmt_name;
 	struct sr_analog_encoding encoding;
 };
 
-static const struct sample_format const sample_formats[] =
+static const struct sample_format sample_formats[] =
 {
 	{ "S8",         { 1, TRUE,  FALSE, FALSE, 0, TRUE, { 1,                     128}, { 0, 1}}},
 	{ "U8",         { 1, FALSE, FALSE, FALSE, 0, TRUE, { 1,                     255}, {-1, 2}}},
@@ -151,7 +151,7 @@ static int process_buffer(struct sr_input *in)
 
 	inc = in->priv;
 	if (!inc->started) {
-		std_session_send_df_header(in->sdi, LOG_PREFIX);
+		std_session_send_df_header(in->sdi);
 
 		if (inc->samplerate) {
 			packet.type = SR_DF_META;
@@ -217,7 +217,6 @@ static int receive(struct sr_input *in, GString *buf)
 
 static int end(struct sr_input *in)
 {
-	struct sr_datafeed_packet packet;
 	struct context *inc;
 	int ret;
 
@@ -227,10 +226,8 @@ static int end(struct sr_input *in)
 		ret = SR_OK;
 
 	inc = in->priv;
-	if (inc->started) {
-		packet.type = SR_DF_END;
-		sr_session_send(in->sdi, &packet);
-	}
+	if (inc->started)
+		std_session_send_df_end(in->sdi);
 
 	return ret;
 }
@@ -270,6 +267,17 @@ static void cleanup(struct sr_input *in)
 	in->priv = NULL;
 }
 
+static int reset(struct sr_input *in)
+{
+	struct context *inc = in->priv;
+
+	cleanup(in);
+	inc->started = FALSE;
+	g_string_truncate(in->buf, 0);
+
+	return SR_OK;
+}
+
 SR_PRIV struct sr_input_module input_raw_analog = {
 	.id = "raw_analog",
 	.name = "RAW analog",
@@ -280,4 +288,5 @@ SR_PRIV struct sr_input_module input_raw_analog = {
 	.receive = receive,
 	.end = end,
 	.cleanup = cleanup,
+	.reset = reset,
 };

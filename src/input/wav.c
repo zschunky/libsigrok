@@ -31,7 +31,7 @@
 #define LOG_PREFIX "input/wav"
 
 /* How many bytes at a time to process and send to the session bus. */
-#define CHUNK_SIZE 4096
+#define CHUNK_SIZE               4096
 
 /* Minimum size of header + 1 8-bit mono PCM sample. */
 #define MIN_DATA_CHUNK_OFFSET    45
@@ -184,7 +184,10 @@ static int find_data_chunk(GString *buf, int initial_offset)
 static void send_chunk(const struct sr_input *in, int offset, int num_samples)
 {
 	struct sr_datafeed_packet packet;
-	struct sr_datafeed_analog_old analog;
+	struct sr_datafeed_analog analog;
+	struct sr_analog_encoding encoding;
+	struct sr_analog_meaning meaning;
+	struct sr_analog_spec spec;
 	struct context *inc;
 	float fdata[CHUNK_SIZE];
 	int total_samples, samplenum;
@@ -223,14 +226,17 @@ static void send_chunk(const struct sr_input *in, int offset, int num_samples)
 		s += inc->unitsize;
 		d += inc->unitsize;
 	}
-	packet.type = SR_DF_ANALOG_OLD;
+
+	/* TODO: Use proper 'digits' value for this device (and its modes). */
+	sr_analog_init(&analog, &encoding, &meaning, &spec, 2);
+	packet.type = SR_DF_ANALOG;
 	packet.payload = &analog;
-	analog.channels = in->sdi->channels;
 	analog.num_samples = num_samples;
-	analog.mq = 0;
-	analog.mqflags = 0;
-	analog.unit = 0;
 	analog.data = fdata;
+	analog.meaning->channels = in->sdi->channels;
+	analog.meaning->mq = 0;
+	analog.meaning->mqflags = 0;
+	analog.meaning->unit = 0;
 	sr_session_send(in->sdi, &packet);
 }
 
@@ -245,7 +251,7 @@ static int process_buffer(struct sr_input *in)
 
 	inc = in->priv;
 	if (!inc->started) {
-		std_session_send_df_header(in->sdi, LOG_PREFIX);
+		std_session_send_df_header(in->sdi);
 
 		packet.type = SR_DF_META;
 		packet.payload = &meta;
@@ -341,7 +347,6 @@ static int receive(struct sr_input *in, GString *buf)
 
 static int end(struct sr_input *in)
 {
-	struct sr_datafeed_packet packet;
 	struct context *inc;
 	int ret;
 
@@ -351,12 +356,20 @@ static int end(struct sr_input *in)
 		ret = SR_OK;
 
 	inc = in->priv;
-	if (inc->started) {
-		packet.type = SR_DF_END;
-		sr_session_send(in->sdi, &packet);
-	}
+	if (inc->started)
+		std_session_send_df_end(in->sdi);
 
 	return ret;
+}
+
+static int reset(struct sr_input *in)
+{
+	struct context *inc = in->priv;
+
+	inc->started = FALSE;
+	g_string_truncate(in->buf, 0);
+
+	return SR_OK;
 }
 
 SR_PRIV struct sr_input_module input_wav = {
@@ -369,4 +382,5 @@ SR_PRIV struct sr_input_module input_wav = {
 	.init = init,
 	.receive = receive,
 	.end = end,
+	.reset = reset,
 };

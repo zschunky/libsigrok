@@ -95,8 +95,8 @@ SR_PRIV int maynuo_m97_get_model_version(struct sr_modbus_dev_inst *modbus,
 	uint16_t registers[2];
 	int ret;
 	ret = sr_modbus_read_holding_registers(modbus, MODEL, 2, registers);
-	*model   = RB16(registers+0);
-	*version = RB16(registers+1);
+	*model   = RB16(registers + 0);
+	*version = RB16(registers + 1);
 	return ret;
 }
 
@@ -125,22 +125,26 @@ SR_PRIV const char *maynuo_m97_mode_to_str(enum maynuo_m97_mode mode)
 }
 
 
-static void maynuo_m97_session_send_value(const struct sr_dev_inst *sdi, struct sr_channel *ch, float value, enum sr_mq mq, enum sr_unit unit)
+static void maynuo_m97_session_send_value(const struct sr_dev_inst *sdi, struct sr_channel *ch, float value, enum sr_mq mq, enum sr_unit unit, int digits)
 {
 	struct sr_datafeed_packet packet;
-	struct sr_datafeed_analog_old analog;
+	struct sr_datafeed_analog analog;
+	struct sr_analog_encoding encoding;
+	struct sr_analog_meaning meaning;
+	struct sr_analog_spec spec;
 
-	analog.channels = g_slist_append(NULL, ch);
+	sr_analog_init(&analog, &encoding, &meaning, &spec, digits);
+	analog.meaning->channels = g_slist_append(NULL, ch);
 	analog.num_samples = 1;
 	analog.data = &value;
-	analog.mq = mq;
-	analog.unit = unit;
-	analog.mqflags = SR_MQFLAG_DC;
+	analog.meaning->mq = mq;
+	analog.meaning->unit = unit;
+	analog.meaning->mqflags = SR_MQFLAG_DC;
 
-	packet.type = SR_DF_ANALOG_OLD;
+	packet.type = SR_DF_ANALOG;
 	packet.payload = &analog;
 	sr_session_send(sdi, &packet);
-	g_slist_free(analog.channels);
+	g_slist_free(analog.meaning->channels);
 }
 
 SR_PRIV int maynuo_m97_capture_start(const struct sr_dev_inst *sdi)
@@ -164,7 +168,6 @@ SR_PRIV int maynuo_m97_receive_data(int fd, int revents, void *cb_data)
 	struct sr_modbus_dev_inst *modbus;
 	struct sr_datafeed_packet packet;
 	uint16_t registers[4];
-	int64_t t;
 
 	(void)fd;
 	(void)revents;
@@ -178,33 +181,23 @@ SR_PRIV int maynuo_m97_receive_data(int fd, int revents, void *cb_data)
 	devc->expecting_registers = 0;
 	if (sr_modbus_read_holding_registers(modbus, -1, 4, registers) == SR_OK) {
 		packet.type = SR_DF_FRAME_BEGIN;
-		sr_session_send(cb_data, &packet);
+		sr_session_send(sdi, &packet);
 
 		maynuo_m97_session_send_value(sdi, sdi->channels->data,
 		                              RBFL(registers + 0),
-		                              SR_MQ_VOLTAGE, SR_UNIT_VOLT);
+		                              SR_MQ_VOLTAGE, SR_UNIT_VOLT, 3);
 		maynuo_m97_session_send_value(sdi, sdi->channels->next->data,
 		                              RBFL(registers + 2),
-		                              SR_MQ_CURRENT, SR_UNIT_AMPERE);
+		                              SR_MQ_CURRENT, SR_UNIT_AMPERE, 4);
 
 		packet.type = SR_DF_FRAME_END;
-		sr_session_send(cb_data, &packet);
-		devc->num_samples++;
+		sr_session_send(sdi, &packet);
+		sr_sw_limits_update_samples_read(&devc->limits, 1);
 	}
 
-	if (devc->limit_samples && (devc->num_samples >= devc->limit_samples)) {
-		sr_info("Requested number of samples reached.");
-		sdi->driver->dev_acquisition_stop(sdi, cb_data);
+	if (sr_sw_limits_check(&devc->limits)) {
+		sdi->driver->dev_acquisition_stop(sdi);
 		return TRUE;
-	}
-
-	if (devc->limit_msec) {
-		t = (g_get_monotonic_time() - devc->starttime) / 1000;
-		if (t > (int64_t)devc->limit_msec) {
-			sr_info("Requested time limit reached.");
-			sdi->driver->dev_acquisition_stop(sdi, cb_data);
-			return TRUE;
-		}
 	}
 
 	maynuo_m97_capture_start(sdi);

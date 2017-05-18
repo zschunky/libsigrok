@@ -22,6 +22,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <ctype.h>
+#include <math.h>
 #include <libsigrok/libsigrok.h>
 #include "libsigrok-internal.h"
 
@@ -62,8 +63,8 @@ static struct unit_mq_string unit_strings[] = {
 	{ SR_UNIT_BOOLEAN, "" },
 	{ SR_UNIT_SECOND, "s" },
 	{ SR_UNIT_SIEMENS, "S" },
-	{ SR_UNIT_DECIBEL_MW, "dBu" },
-	{ SR_UNIT_DECIBEL_VOLT, "dBv" },
+	{ SR_UNIT_DECIBEL_MW, "dBm" },
+	{ SR_UNIT_DECIBEL_VOLT, "dBV" },
 	{ SR_UNIT_UNITLESS, "" },
 	{ SR_UNIT_DECIBEL_SPL, "dB" },
 	{ SR_UNIT_CONCENTRATION, "ppm" },
@@ -114,6 +115,7 @@ static struct unit_mq_string mq_strings[] = {
 	{ SR_MQFLAG_AVG, " AVG" },
 	{ SR_MQFLAG_REFERENCE, " REF" },
 	{ SR_MQFLAG_UNSTABLE, " UNSTABLE" },
+	{ SR_MQFLAG_FOUR_WIRE, " 4-WIRE" },
 	ALL_ZERO
 };
 
@@ -154,13 +156,13 @@ SR_PRIV int sr_analog_init(struct sr_datafeed_analog *analog,
 /**
  * Convert an analog datafeed payload to an array of floats.
  *
+ * Sufficient memory for outbuf must have been pre-allocated by the caller,
+ * who is also responsible for freeing it when no longer needed.
+ *
  * @param[in] analog The analog payload to convert. Must not be NULL.
  *                   analog->data, analog->meaning, and analog->encoding
  *                   must not be NULL.
  * @param[out] outbuf Memory where to store the result. Must not be NULL.
- *
- * Sufficient memory for outbuf must have been pre-allocated by the caller,
- * who is also responsible for freeing it when no longer needed.
  *
  * @retval SR_OK Success.
  * @retval SR_ERR Unsupported encoding.
@@ -186,6 +188,7 @@ SR_API int sr_analog_to_float(const struct sr_datafeed_analog *analog,
 #else
 	bigendian = FALSE;
 #endif
+
 	if (!analog->encoding->is_float) {
 		float offset = analog->encoding->offset.p / (float)analog->encoding->offset.q;
 		float scale = analog->encoding->scale.p / (float)analog->encoding->scale.q;
@@ -256,8 +259,8 @@ SR_API int sr_analog_to_float(const struct sr_datafeed_analog *analog,
 			}
 			break;
 		default:
-			sr_err("Unsupported unit size '%d' for analog-to-float conversion.",
-				analog->encoding->unitsize);
+			sr_err("Unsupported unit size '%d' for analog-to-float"
+			       " conversion.", analog->encoding->unitsize);
 			return SR_ERR;
 		}
 		return SR_OK;
@@ -292,14 +295,91 @@ SR_API int sr_analog_to_float(const struct sr_datafeed_analog *analog,
 }
 
 /**
+ * Scale a float value to the appropriate SI prefix.
+ *
+ * @param[in,out] value The float value to convert to appropriate SI prefix.
+ * @param[in,out] digits The number of significant decimal digits in value.
+ *
+ * @return The SI prefix to which value was scaled, as a printable string.
+ *
+ * @since 0.5.0
+ */
+SR_API const char *sr_analog_si_prefix(float *value, int *digits)
+{
+#define NEG_PREFIX_COUNT 5  /* number of prefixes below unity */
+#define POS_PREFIX_COUNT (int)(ARRAY_SIZE(prefixes) - NEG_PREFIX_COUNT - 1)
+	static const char *prefixes[] = { "f", "p", "n", "µ", "m", "", "k", "M", "G", "T" };
+
+	if (!value || !digits || isnan(*value))
+		return prefixes[NEG_PREFIX_COUNT];
+
+	float logval = log10f(fabsf(*value));
+	int prefix = (logval / 3) - (logval < 1);
+
+	if (prefix < -NEG_PREFIX_COUNT)
+		prefix = -NEG_PREFIX_COUNT;
+	if (3 * prefix < -*digits)
+		prefix = (-*digits + 2 * (*digits < 0)) / 3;
+	if (prefix > POS_PREFIX_COUNT)
+		prefix = POS_PREFIX_COUNT;
+
+	*value *= powf(10, -3 * prefix);
+	*digits += 3 * prefix;
+
+	return prefixes[prefix + NEG_PREFIX_COUNT];
+}
+
+/**
+ * Check if a unit "accepts" an SI prefix.
+ *
+ * E.g. SR_UNIT_VOLT is SI prefix friendly while SR_UNIT_DECIBEL_MW or
+ * SR_UNIT_PERCENTAGE are not.
+ *
+ * @param[in] unit The unit to check for SI prefix "friendliness".
+ *
+ * @return TRUE if the unit "accept" an SI prefix.
+ *
+ * @since 0.5.0
+ */
+SR_API gboolean sr_analog_si_prefix_friendly(enum sr_unit unit)
+{
+	static const enum sr_unit prefix_friendly_units[] = {
+		SR_UNIT_VOLT,
+		SR_UNIT_AMPERE,
+		SR_UNIT_OHM,
+		SR_UNIT_FARAD,
+		SR_UNIT_KELVIN,
+		SR_UNIT_HERTZ,
+		SR_UNIT_SECOND,
+		SR_UNIT_SIEMENS,
+		SR_UNIT_VOLT_AMPERE,
+		SR_UNIT_WATT,
+		SR_UNIT_WATT_HOUR,
+		SR_UNIT_METER_SECOND,
+		SR_UNIT_HENRY,
+		SR_UNIT_GRAM
+	};
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(prefix_friendly_units); i++)
+		if (unit == prefix_friendly_units[i])
+			break;
+
+	if (unit != prefix_friendly_units[i])
+		return FALSE;
+
+	return TRUE;
+}
+
+/**
  * Convert the unit/MQ/MQ flags in the analog struct to a string.
+ *
+ * The string is allocated by the function and must be freed by the caller
+ * after use by calling g_free().
  *
  * @param[in] analog Struct containing the unit, MQ and MQ flags.
  *                   Must not be NULL. analog->meaning must not be NULL.
  * @param[out] result Pointer to store result. Must not be NULL.
- *
- * The string is allocated by the function and must be freed by the caller
- * after use by calling g_free().
  *
  * @retval SR_OK Success.
  * @retval SR_ERR_ARG Invalid argument.
@@ -351,6 +431,203 @@ SR_API void sr_rational_set(struct sr_rational *r, int64_t p, uint64_t q)
 
 	r->p = p;
 	r->q = q;
+}
+
+#ifndef HAVE___INT128_T
+struct sr_int128_t {
+	int64_t high;
+	uint64_t low;
+};
+
+struct sr_uint128_t {
+	uint64_t high;
+	uint64_t low;
+};
+
+static void mult_int64(struct sr_int128_t *res, const int64_t a,
+	const int64_t b)
+{
+	uint64_t t1, t2, t3, t4;
+
+	t1 = (UINT32_MAX & a) * (UINT32_MAX & b);
+	t2 = (UINT32_MAX & a) * (b >> 32);
+	t3 = (a >> 32) * (UINT32_MAX & b);
+	t4 = (a >> 32) * (b >> 32);
+
+	res->low = t1 + (t2 << 32) + (t3 << 32);
+	res->high = (t1 >> 32) + (uint64_t)((uint32_t)(t2)) + (uint64_t)((uint32_t)(t3));
+	res->high >>= 32;
+	res->high += ((int64_t)t2 >> 32) + ((int64_t)t3 >> 32) + t4;
+}
+
+static void mult_uint64(struct sr_uint128_t *res, const uint64_t a,
+	const uint64_t b)
+{
+	uint64_t t1, t2, t3, t4;
+
+	// (x1 + x2) * (y1 + y2) = x1*y1 + x1*y2 + x2*y1 + x2*y2
+	t1 = (UINT32_MAX & a) * (UINT32_MAX & b);
+	t2 = (UINT32_MAX & a) * (b >> 32);
+	t3 = (a >> 32) * (UINT32_MAX & b);
+	t4 = (a >> 32) * (b >> 32);
+
+	res->low = t1 + (t2 << 32) + (t3 << 32);
+	res->high = (t1 >> 32) + (uint64_t)((uint32_t)(t2)) + (uint64_t)((uint32_t)(t3));
+	res->high >>= 32;
+	res->high += ((int64_t)t2 >> 32) + ((int64_t)t3 >> 32) + t4;
+}
+#endif
+
+/**
+ * Compare two sr_rational for equality.
+ *
+ * The values are compared for numerical equality, i.e. 2/10 == 1/5.
+ *
+ * @param[in] a First value.
+ * @param[in] b Second value.
+ *
+ * @retval 1 if both values are equal.
+ * @retval 0 Otherwise.
+ *
+ * @since 0.5.0
+ */
+SR_API int sr_rational_eq(const struct sr_rational *a, const struct sr_rational *b)
+{
+#ifdef HAVE___INT128_T
+	__int128_t m1, m2;
+
+	/* p1/q1 = p2/q2  <=>  p1*q2 = p2*q1 */
+	m1 = ((__int128_t)(b->p)) * ((__uint128_t)a->q);
+	m2 = ((__int128_t)(a->p)) * ((__uint128_t)b->q);
+
+	return (m1 == m2);
+
+#else
+	struct sr_int128_t m1, m2;
+
+	mult_int64(&m1, a->q, b->p);
+	mult_int64(&m2, a->p, b->q);
+
+	return (m1.high == m2.high) && (m1.low == m2.low);
+#endif
+}
+
+/**
+ * Multiply two sr_rational.
+ *
+ * The resulting nominator/denominator are reduced if the result would not fit
+ * otherwise. If the resulting nominator/denominator are relatively prime,
+ * this may not be possible.
+ *
+ * It is safe to use the same variable for result and input values.
+ *
+ * @param[in] a First value.
+ * @param[in] b Second value.
+ * @param[out] res Result.
+ *
+ * @retval SR_OK Success.
+ * @retval SR_ERR_ARG Resulting value too large.
+ *
+ * @since 0.5.0
+ */
+SR_API int sr_rational_mult(struct sr_rational *res, const struct sr_rational *a,
+	const struct sr_rational *b)
+{
+#ifdef HAVE___INT128_T
+	__int128_t p;
+	__uint128_t q;
+
+	p = (__int128_t)(a->p) * (__int128_t)(b->p);
+	q = (__uint128_t)(a->q) * (__uint128_t)(b->q);
+
+	if ((p > INT64_MAX) || (p < INT64_MIN) || (q > UINT64_MAX)) {
+		while (!((p & 1) || (q & 1))) {
+			p /= 2;
+			q /= 2;
+		}
+	}
+
+	if ((p > INT64_MAX) || (p < INT64_MIN) || (q > UINT64_MAX)) {
+		// TODO: determine gcd to do further reduction
+		return SR_ERR_ARG;
+	}
+
+	res->p = (int64_t)(p);
+	res->q = (uint64_t)(q);
+
+	return SR_OK;
+
+#else
+	struct sr_int128_t p;
+	struct sr_uint128_t q;
+
+	mult_int64(&p, a->p, b->p);
+	mult_uint64(&q, a->q, b->q);
+
+	while (!(p.low & 1) && !(q.low & 1)) {
+		p.low /= 2;
+		if (p.high & 1)
+			p.low |= (1ll << 63);
+		p.high >>= 1;
+		q.low /= 2;
+		if (q.high & 1)
+			q.low |= (1ll << 63);
+		q.high >>= 1;
+	}
+
+	if (q.high)
+		return SR_ERR_ARG;
+	if ((p.high >= 0) && (p.low > INT64_MAX))
+		return SR_ERR_ARG;
+	if (p.high < -1)
+		return SR_ERR_ARG;
+
+	res->p = (int64_t)p.low;
+	res->q = q.low;
+
+	return SR_OK;
+#endif
+}
+
+/**
+ * Divide rational a by rational b.
+ *
+ * The resulting nominator/denominator are reduced if the result would not fit
+ * otherwise. If the resulting nominator/denominator are relatively prime,
+ * this may not be possible.
+ *
+ * It is safe to use the same variable for result and input values.
+ *
+ * @param[in] num Numerator.
+ * @param[in] div Divisor.
+ * @param[out] res Result.
+ *
+ * @retval SR_OK Success.
+ * @retval SR_ERR_ARG Division by zero.
+ * @retval SR_ERR_ARG Denominator of divisor too large.
+ * @retval SR_ERR_ARG Resulting value too large.
+ *
+ * @since 0.5.0
+ */
+SR_API int sr_rational_div(struct sr_rational *res, const struct sr_rational *num,
+	const struct sr_rational *div)
+{
+	struct sr_rational t;
+
+	if (div->q > INT64_MAX)
+		return SR_ERR_ARG;
+	if (div->p == 0)
+		return SR_ERR_ARG;
+
+	if (div->p > 0) {
+		t.p = div->q;
+		t.q = div->p;
+	} else {
+		t.p = -div->q;
+		t.q = -div->p;
+	}
+
+	return sr_rational_mult(res, num, &t);
 }
 
 /** @} */

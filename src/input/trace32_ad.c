@@ -50,15 +50,14 @@
 #define MAX_POD_COUNT     12
 #define HEADER_SIZE       80
 
-#define TIMESTAMP_RESOLUTION  ((double)0.000000000078125) /* 0.078125 ns */
+#define TIMESTAMP_RESOLUTION ((double)0.000000000078125) /* 0.078125 ns */
 
 /*
  * The resolution equals a sampling freq of 12.8 GHz. That's a bit high
  * for inter-record sample generation, so we scale it down to 200 MHz
  * for now. That way, the scaling factor becomes 32.
  */
-#define SAMPLING_FREQ 200000000
-#define TIMESTAMP_SCALE ((1 / TIMESTAMP_RESOLUTION) / SAMPLING_FREQ)
+#define DEFAULT_SAMPLERATE 200
 
 enum {
 	AD_FORMAT_BINHDR = 1, /* Binary header, binary data, textual setup info */
@@ -80,7 +79,7 @@ enum {
 
 enum {
 	AD_COMPR_NONE  = 0, /* File created with /NOCOMPRESS */
-	AD_COMPR_QCOMP = 6  /* File created with /COMPRESS or /QUICKCOMPRESS */
+	AD_COMPR_QCOMP = 6, /* File created with /COMPRESS or /QUICKCOMPRESS */
 };
 
 struct context {
@@ -92,6 +91,8 @@ struct context {
 	uint64_t trigger_timestamp;
 	uint32_t record_size, record_count, cur_record;
 	int32_t last_record;
+	uint64_t samplerate;
+	double timestamp_scale;
 	GString *out_buf;
 };
 
@@ -129,6 +130,12 @@ static int init(struct sr_input *in, GHashTable *options)
 	in->priv = g_malloc0(sizeof(struct context));
 
 	inc = in->priv;
+
+	/* Calculate the desired timestamp scaling factor. */
+	inc->samplerate = 1000000 *
+		g_variant_get_uint32(g_hash_table_lookup(options, "samplerate"));
+
+	inc->timestamp_scale = ((1 / TIMESTAMP_RESOLUTION) / (double)inc->samplerate);
 
 	/* Enable the pods the user chose to see. */
 	for (pod = 0; pod < MAX_POD_COUNT; pod++) {
@@ -246,8 +253,8 @@ static int process_header(GString *buf, struct context *inc)
 
 	inc->device       = device_id;
 	inc->trigger_timestamp = RL64(buf->str + 32);
-	inc->compression  = R8(buf->str + 48);        /* Maps to the enum. */
-	inc->record_mode  = R8(buf->str + 55);        /* Maps to the enum. */
+	inc->compression  = R8(buf->str + 48); /* Maps to the enum. */
+	inc->record_mode  = R8(buf->str + 55); /* Maps to the enum. */
 	inc->record_size  = record_size;
 	inc->record_count = RL32(buf->str + 60);
 	inc->last_record  = RL32S(buf->str + 64);
@@ -304,15 +311,16 @@ static void send_metadata(struct sr_input *in)
 	struct sr_config *src;
 	struct context *inc;
 
+	inc = in->priv;
+
 	packet.type = SR_DF_META;
 	packet.payload = &meta;
-	src = sr_config_new(SR_CONF_SAMPLERATE, g_variant_new_uint64(SAMPLING_FREQ));
+	src = sr_config_new(SR_CONF_SAMPLERATE, g_variant_new_uint64(inc->samplerate));
 	meta.config = g_slist_append(NULL, src);
 	sr_session_send(in->sdi, &packet);
 	g_slist_free(meta.config);
 	sr_config_free(src);
 
-	inc = in->priv;
 	inc->meta_sent = TRUE;
 }
 
@@ -484,7 +492,7 @@ static void process_record_pi(struct sr_input *in, gsize start)
 	} else {
 		/* It's not, so fill the time gap by sending lots of data. */
 		next_timestamp = RL64(buf->str + start + inc->record_size);
-		packet_count = (int)(next_timestamp - timestamp) / TIMESTAMP_SCALE;
+		packet_count = (int)(next_timestamp - timestamp) / inc->timestamp_scale;
 
 		/* Make sure we send at least one data set. */
 		if (packet_count == 0)
@@ -537,7 +545,7 @@ static void process_record_iprobe(struct sr_input *in, gsize start)
 	} else {
 		/* It's not, so fill the time gap by sending lots of data. */
 		next_timestamp = RL64(in->buf->str + start + inc->record_size);
-		packet_count = (int)(next_timestamp - timestamp) / TIMESTAMP_SCALE;
+		packet_count = (int)(next_timestamp - timestamp) / inc->timestamp_scale;
 
 		/* Make sure we send at least one data set. */
 		if (packet_count == 0)
@@ -675,7 +683,7 @@ static int process_buffer(struct sr_input *in)
 	}
 
 	if (!inc->meta_sent) {
-		std_session_send_df_header(in->sdi, LOG_PREFIX);
+		std_session_send_df_header(in->sdi);
 		send_metadata(in);
 	}
 
@@ -731,7 +739,6 @@ static int receive(struct sr_input *in, GString *buf)
 static int end(struct sr_input *in)
 {
 	struct context *inc;
-	struct sr_datafeed_packet packet;
 	int ret;
 
 	inc = in->priv;
@@ -743,12 +750,25 @@ static int end(struct sr_input *in)
 
 	flush_output_buffer(in);
 
-	if (inc->meta_sent) {
-		packet.type = SR_DF_END;
-		sr_session_send(in->sdi, &packet);
-	}
+	if (inc->meta_sent)
+		std_session_send_df_end(in->sdi);
 
 	return ret;
+}
+
+static int reset(struct sr_input *in)
+{
+	struct context *inc = in->priv;
+
+	inc->meta_sent = FALSE;
+	inc->header_read = FALSE;
+	inc->records_read = FALSE;
+	inc->trigger_sent = FALSE;
+	inc->cur_record = 0;
+
+	g_string_truncate(in->buf, 0);
+
+	return SR_OK;
 }
 
 static struct sr_option options[] = {
@@ -766,6 +786,9 @@ static struct sr_option options[] = {
 	{ "podM", "Import pod M", "Create channels and data for pod M", NULL, NULL },
 	{ "podN", "Import pod N", "Create channels and data for pod N", NULL, NULL },
 	{ "podO", "Import pod O", "Create channels and data for pod O", NULL, NULL },
+
+	{ "samplerate", "Reduced sample rate in MHz", "Reduced sample rate in MHz", NULL, NULL },
+
 	ALL_ZERO
 };
 
@@ -784,6 +807,7 @@ static const struct sr_option *get_options(void)
 		options[9].def = g_variant_ref_sink(g_variant_new_boolean(FALSE));
 		options[10].def = g_variant_ref_sink(g_variant_new_boolean(FALSE));
 		options[11].def = g_variant_ref_sink(g_variant_new_boolean(FALSE));
+		options[12].def = g_variant_ref_sink(g_variant_new_uint32(DEFAULT_SAMPLERATE));
 	}
 
 	return options;
@@ -800,4 +824,5 @@ SR_PRIV struct sr_input_module input_trace32_ad = {
 	.init = init,
 	.receive = receive,
 	.end = end,
+	.reset = reset,
 };

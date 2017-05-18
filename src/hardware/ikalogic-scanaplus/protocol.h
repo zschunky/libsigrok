@@ -14,8 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef LIBSIGROK_HARDWARE_IKALOGIC_SCANAPLUS_PROTOCOL_H
@@ -42,8 +41,6 @@ struct dev_context {
 
 	/** The current sampling limit (in number of samples). */
 	uint64_t limit_samples;
-
-	void *cb_data;
 
 	uint8_t *compressed_buf;
 	uint64_t compressed_bytes_ignored;

@@ -15,8 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <config.h>
@@ -30,7 +29,6 @@
 
 struct context {
 	int num_enabled_channels;
-	GArray *channelindices;
 	uint8_t *prevsample;
 	gboolean header_done;
 	int period;
@@ -130,7 +128,7 @@ static GString *gen_header(const struct sr_output *o)
 		ctx->period = SR_MHZ(1);
 	else
 		ctx->period = SR_KHZ(1);
-	frequency_s = sr_period_string(ctx->period);
+	frequency_s = sr_period_string(1, ctx->period);
 	g_string_append_printf(header, "$timescale %s $end\n", frequency_s);
 	g_free(frequency_s);
 

@@ -38,7 +38,7 @@
 #define EP_OUT 2
 
 enum {
-    DATA_SOURCE_LIVE,
+	DATA_SOURCE_LIVE,
 	DATA_SOURCE_MEMORY,
 };
 
@@ -58,7 +58,6 @@ struct dev_context {
 	uint64_t num_samples;
 	unsigned char buf[8];
 	struct libusb_transfer *xfer;
-	void *cb_data;
 
 	/* Temporary state across callbacks */
 	unsigned char packet[32];

@@ -89,7 +89,7 @@ struct context {
 	/* Comment prefix character(s). */
 	GString *comment;
 
-	/* Termination  character(s) used in current stream. */
+	/* Termination character(s) used in current stream. */
 	char *termination;
 
 	/* Determines if sample data is stored in multiple columns. */
@@ -612,7 +612,7 @@ static int process_buffer(struct sr_input *in)
 
 	inc = in->priv;
 	if (!inc->started) {
-		std_session_send_df_header(in->sdi, LOG_PREFIX);
+		std_session_send_df_header(in->sdi);
 
 		if (inc->samplerate) {
 			packet.type = SR_DF_META;
@@ -738,7 +738,6 @@ static int receive(struct sr_input *in, GString *buf)
 static int end(struct sr_input *in)
 {
 	struct context *inc;
-	struct sr_datafeed_packet packet;
 	int ret;
 
 	if (in->sdi_ready)
@@ -747,11 +746,8 @@ static int end(struct sr_input *in)
 		ret = SR_OK;
 
 	inc = in->priv;
-	if (inc->started) {
-		/* End of stream. */
-		packet.type = SR_DF_END;
-		sr_session_send(in->sdi, &packet);
-	}
+	if (inc->started)
+		std_session_send_df_end(in->sdi);
 
 	return ret;
 }
@@ -770,6 +766,17 @@ static void cleanup(struct sr_input *in)
 
 	g_free(inc->termination);
 	g_free(inc->sample_buffer);
+}
+
+static int reset(struct sr_input *in)
+{
+	struct context *inc = in->priv;
+
+	cleanup(in);
+	inc->started = FALSE;
+	g_string_truncate(in->buf, 0);
+
+	return SR_OK;
 }
 
 static struct sr_option options[] = {
@@ -812,4 +819,5 @@ SR_PRIV struct sr_input_module input_csv = {
 	.receive = receive,
 	.end = end,
 	.cleanup = cleanup,
+	.reset = reset,
 };

@@ -207,8 +207,8 @@ static const struct scope_config scope_models[] = {
 		.num_ydivs = 8,
 	},
 	{
-		.model_id    = {"710110",  "710120",  "710130",  NULL},
-		.model_name  = {"DLM2024", "DLM2034", "DLM2054", NULL},
+		.model_id   = {"710110",  "710120",  "710130",  NULL},
+		.model_name = {"DLM2024", "DLM2034", "DLM2054", NULL},
 		.analog_channels = 4,
 		.digital_channels = 8,
 		.pods = 1,
@@ -224,9 +224,9 @@ static const struct scope_config scope_models[] = {
 	},
 	{
 		.model_id   = {"701307", "701308",  "701310", "701311",
-				"701312", "701313",  NULL},
+			       "701312", "701313",  NULL},
 		.model_name = {"DL9040", "DL9040L", "DL9140", "DL9140L",
-				"DL9240", "DL9240L", NULL},
+			       "DL9240", "DL9240L", NULL},
 		.analog_channels = 4,
 		.digital_channels = 0,
 		.pods = 0,
@@ -305,7 +305,7 @@ static void scope_state_dump(const struct scope_config *config,
 				state->pod_states[i] ? "On" : "Off");
 	}
 
-	tmp = sr_period_string(dlm_timebases[state->timebase][0] *
+	tmp = sr_period_string(dlm_timebases[state->timebase][0],
 			dlm_timebases[state->timebase][1]);
 	sr_info("Current timebase: %s", tmp);
 	g_free(tmp);
@@ -964,7 +964,10 @@ static int dlm_analog_samples_send(GArray *data,
 	struct dev_context *devc;
 	struct scope_state *model_state;
 	struct sr_channel *ch;
-	struct sr_datafeed_analog_old analog;
+	struct sr_datafeed_analog analog;
+	struct sr_analog_encoding encoding;
+	struct sr_analog_meaning meaning;
+	struct sr_analog_spec spec;
 	struct sr_datafeed_packet packet;
 
 	devc = sdi->priv;
@@ -992,16 +995,18 @@ static int dlm_analog_samples_send(GArray *data,
 		g_array_append_val(float_data, voltage);
 	}
 
-	analog.channels = g_slist_append(NULL, ch);
+	/* TODO: Use proper 'digits' value for this device (and its modes). */
+	sr_analog_init(&analog, &encoding, &meaning, &spec, 2);
+	analog.meaning->channels = g_slist_append(NULL, ch);
 	analog.num_samples = float_data->len;
 	analog.data = (float*)float_data->data;
-	analog.mq = SR_MQ_VOLTAGE;
-	analog.unit = SR_UNIT_VOLT;
-	analog.mqflags = 0;
-	packet.type = SR_DF_ANALOG_OLD;
+	analog.meaning->mq = SR_MQ_VOLTAGE;
+	analog.meaning->unit = SR_UNIT_VOLT;
+	analog.meaning->mqflags = 0;
+	packet.type = SR_DF_ANALOG;
 	packet.payload = &analog;
 	sr_session_send(sdi, &packet);
-	g_slist_free(analog.channels);
+	g_slist_free(analog.meaning->channels);
 
 	g_array_free(float_data, TRUE);
 	g_array_remove_range(data, 0, samples * sizeof(uint8_t));
@@ -1166,7 +1171,7 @@ SR_PRIV int dlm_data_receive(int fd, int revents, void *cb_data)
 		 * As of now we only support importing the current acquisition
 		 * data so we're going to stop at this point.
 		 */
-		sdi->driver->dev_acquisition_stop(sdi, cb_data);
+		sdi->driver->dev_acquisition_stop(sdi);
 		return TRUE;
 	} else
 		devc->current_channel = devc->current_channel->next;

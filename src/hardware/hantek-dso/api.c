@@ -18,6 +18,7 @@
  */
 
 #include <config.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -32,14 +33,14 @@
 #include <libusb.h>
 #include <libsigrok/libsigrok.h>
 #include "libsigrok-internal.h"
-#include "dso.h"
+#include "protocol.h"
 
 /* Max time in ms before we want to check on USB events */
 /* TODO tune this properly */
 #define TICK 1
 
-#define NUM_TIMEBASE  10
-#define NUM_VDIV      8
+#define NUM_TIMEBASE 10
+#define NUM_VDIV     8
 
 #define NUM_BUFFER_SIZES 2
 
@@ -52,22 +53,22 @@ static const uint32_t drvopts[] = {
 };
 
 static const uint32_t devopts[] = {
-	SR_CONF_CONTINUOUS | SR_CONF_SET,
-	SR_CONF_LIMIT_FRAMES | SR_CONF_SET,
+	SR_CONF_CONTINUOUS,
 	SR_CONF_CONN | SR_CONF_GET,
+	SR_CONF_LIMIT_FRAMES | SR_CONF_SET,
 	SR_CONF_TIMEBASE | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
-	SR_CONF_BUFFERSIZE | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
+	SR_CONF_NUM_HDIV | SR_CONF_GET,
+	SR_CONF_HORIZ_TRIGGERPOS | SR_CONF_GET | SR_CONF_SET,
 	SR_CONF_TRIGGER_SOURCE | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
 	SR_CONF_TRIGGER_SLOPE | SR_CONF_GET | SR_CONF_SET,
-	SR_CONF_HORIZ_TRIGGERPOS | SR_CONF_GET | SR_CONF_SET,
-	SR_CONF_NUM_HDIV | SR_CONF_GET,
+	SR_CONF_BUFFERSIZE | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
 	SR_CONF_NUM_VDIV | SR_CONF_GET,
 };
 
 static const uint32_t devopts_cg[] = {
-	SR_CONF_FILTER | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
 	SR_CONF_VDIV | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
 	SR_CONF_COUPLING | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
+	SR_CONF_FILTER | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
 };
 
 static const char *channel_names[] = {
@@ -160,16 +161,13 @@ static const char *coupling[] = {
 	"GND",
 };
 
-SR_PRIV struct sr_dev_driver hantek_dso_driver_info;
-
-static int dev_acquisition_stop(struct sr_dev_inst *sdi, void *cb_data);
+static int dev_acquisition_stop(struct sr_dev_inst *sdi);
 
 static struct sr_dev_inst *dso_dev_new(const struct dso_profile *prof)
 {
 	struct sr_dev_inst *sdi;
 	struct sr_channel *ch;
 	struct sr_channel_group *cg;
-	struct drv_context *drvc;
 	struct dev_context *devc;
 	unsigned int i;
 
@@ -177,7 +175,6 @@ static struct sr_dev_inst *dso_dev_new(const struct dso_profile *prof)
 	sdi->status = SR_ST_INITIALIZING;
 	sdi->vendor = g_strdup(prof->vendor);
 	sdi->model = g_strdup(prof->model);
-	sdi->driver = &hantek_dso_driver_info;
 
 	/*
 	 * Add only the real channels -- EXT isn't a source of data, only
@@ -195,8 +192,8 @@ static struct sr_dev_inst *dso_dev_new(const struct dso_profile *prof)
 	devc->profile = prof;
 	devc->dev_state = IDLE;
 	devc->timebase = DEFAULT_TIMEBASE;
-	devc->ch1_enabled = TRUE;
-	devc->ch2_enabled = TRUE;
+	devc->ch_enabled[0] = TRUE;
+	devc->ch_enabled[1] = TRUE;
 	devc->voltage[0] = DEFAULT_VOLTAGE;
 	devc->voltage[1] = DEFAULT_VOLTAGE;
 	devc->coupling[0] = DEFAULT_COUPLING;
@@ -209,8 +206,6 @@ static struct sr_dev_inst *dso_dev_new(const struct dso_profile *prof)
 	devc->triggersource = g_strdup(DEFAULT_TRIGGER_SOURCE);
 	devc->triggerposition = DEFAULT_HORIZ_TRIGGERPOS;
 	sdi->priv = devc;
-	drvc = hantek_dso_driver_info.context;
-	drvc->instances = g_slist_append(drvc->instances, sdi);
 
 	return sdi;
 }
@@ -225,13 +220,13 @@ static int configure_channels(const struct sr_dev_inst *sdi)
 	devc = sdi->priv;
 
 	g_slist_free(devc->enabled_channels);
-	devc->ch1_enabled = devc->ch2_enabled = FALSE;
+	devc->ch_enabled[0] = devc->ch_enabled[1] = FALSE;
 	for (l = sdi->channels, p = 0; l; l = l->next, p++) {
 		ch = l->data;
 		if (p == 0)
-			devc->ch1_enabled = ch->enabled;
+			devc->ch_enabled[0] = ch->enabled;
 		else
-			devc->ch2_enabled = ch->enabled;
+			devc->ch_enabled[1] = ch->enabled;
 		if (ch->enabled)
 			devc->enabled_channels = g_slist_append(devc->enabled_channels, ch);
 	}
@@ -252,11 +247,6 @@ static void clear_dev_context(void *priv)
 static int dev_clear(const struct sr_dev_driver *di)
 {
 	return std_dev_clear(di, clear_dev_context);
-}
-
-static int init(struct sr_dev_driver *di, struct sr_context *sr_ctx)
-{
-	return std_init(sr_ctx, di, LOG_PREFIX);
 }
 
 static GSList *scan(struct sr_dev_driver *di, GSList *options)
@@ -355,12 +345,7 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 	}
 	libusb_free_device_list(devlist, 1);
 
-	return devices;
-}
-
-static GSList *dev_list(const struct sr_dev_driver *di)
-{
-	return ((struct drv_context *)(di->context))->instances;
+	return std_scan_complete(di, devices);
 }
 
 static int dev_open(struct sr_dev_inst *sdi)
@@ -404,7 +389,7 @@ static int dev_open(struct sr_dev_inst *sdi)
 	err = libusb_claim_interface(usb->devhdl, USB_INTERFACE);
 	if (err != 0) {
 		sr_err("Unable to claim interface: %s.",
-			   libusb_error_name(err));
+			libusb_error_name(err));
 		return SR_ERR;
 	}
 
@@ -416,11 +401,6 @@ static int dev_close(struct sr_dev_inst *sdi)
 	dso_close(sdi);
 
 	return SR_OK;
-}
-
-static int cleanup(const struct sr_dev_driver *di)
-{
-	return dev_clear(di);
 }
 
 static int config_get(uint32_t key, GVariant **data, const struct sr_dev_inst *sdi,
@@ -709,53 +689,56 @@ static void send_chunk(struct sr_dev_inst *sdi, unsigned char *buf,
 		int num_samples)
 {
 	struct sr_datafeed_packet packet;
-	struct sr_datafeed_analog_old analog;
-	struct dev_context *devc;
-	float ch1, ch2, range;
-	int num_channels, data_offset, i;
+	struct sr_datafeed_analog analog;
+	struct sr_analog_encoding encoding;
+	struct sr_analog_meaning meaning;
+	struct sr_analog_spec spec;
+	struct dev_context *devc = sdi->priv;
+	GSList *channels = devc->enabled_channels;
 
-	devc = sdi->priv;
-	num_channels = (devc->ch1_enabled && devc->ch2_enabled) ? 2 : 1;
-	packet.type = SR_DF_ANALOG_OLD;
+	packet.type = SR_DF_ANALOG;
 	packet.payload = &analog;
 	/* TODO: support for 5xxx series 9-bit samples */
-	analog.channels = devc->enabled_channels;
+	sr_analog_init(&analog, &encoding, &meaning, &spec, 0);
 	analog.num_samples = num_samples;
-	analog.mq = SR_MQ_VOLTAGE;
-	analog.unit = SR_UNIT_VOLT;
-	analog.mqflags = 0;
+	analog.meaning->mq = SR_MQ_VOLTAGE;
+	analog.meaning->unit = SR_UNIT_VOLT;
+	analog.meaning->mqflags = 0;
 	/* TODO: Check malloc return value. */
-	analog.data = g_try_malloc(analog.num_samples * sizeof(float) * num_channels);
-	data_offset = 0;
-	for (i = 0; i < analog.num_samples; i++) {
-		/*
-		 * The device always sends data for both channels. If a channel
-		 * is disabled, it contains a copy of the enabled channel's
-		 * data. However, we only send the requested channels to
-		 * the bus.
-		 *
-		 * Voltage values are encoded as a value 0-255 (0-512 on the
-		 * DSO-5200*), where the value is a point in the range
-		 * represented by the vdiv setting. There are 8 vertical divs,
-		 * so e.g. 500mV/div represents 4V peak-to-peak where 0 = -2V
-		 * and 255 = +2V.
-		 */
-		/* TODO: Support for DSO-5xxx series 9-bit samples. */
-		if (devc->ch1_enabled) {
-			range = ((float)vdivs[devc->voltage[0]][0] / vdivs[devc->voltage[0]][1]) * 8;
-			ch1 = range / 255 * *(buf + i * 2 + 1);
-			/* Value is centered around 0V. */
-			ch1 -= range / 2;
-			analog.data[data_offset++] = ch1;
+	analog.data = g_try_malloc(num_samples * sizeof(float));
+
+	for (int ch = 0; ch < 2; ch++) {
+		if (!devc->ch_enabled[ch])
+			continue;
+
+		float range = ((float)vdivs[devc->voltage[ch]][0] / vdivs[devc->voltage[ch]][1]) * 8;
+		float vdivlog = log10f(range / 255);
+		int digits = -(int)vdivlog + (vdivlog < 0.0);
+		analog.encoding->digits = digits;
+		analog.spec->spec_digits = digits;
+		analog.meaning->channels = g_slist_append(NULL, channels->data);
+
+		for (int i = 0; i < num_samples; i++) {
+			/*
+			 * The device always sends data for both channels. If a channel
+			 * is disabled, it contains a copy of the enabled channel's
+			 * data. However, we only send the requested channels to
+			 * the bus.
+			 *
+			 * Voltage values are encoded as a value 0-255 (0-512 on the
+			 * DSO-5200*), where the value is a point in the range
+			 * represented by the vdiv setting. There are 8 vertical divs,
+			 * so e.g. 500mV/div represents 4V peak-to-peak where 0 = -2V
+			 * and 255 = +2V.
+			 */
+			/* TODO: Support for DSO-5xxx series 9-bit samples. */
+			((float *)analog.data)[i] = range / 255 * *(buf + i * 2 + 1 - ch) - range / 2;
 		}
-		if (devc->ch2_enabled) {
-			range = ((float)vdivs[devc->voltage[1]][0] / vdivs[devc->voltage[1]][1]) * 8;
-			ch2 = range / 255 * *(buf + i * 2);
-			ch2 -= range / 2;
-			analog.data[data_offset++] = ch2;
-		}
+		sr_session_send(sdi, &packet);
+		g_slist_free(analog.meaning->channels);
+
+		channels = channels->next;
 	}
-	sr_session_send(devc->cb_data, &packet);
 	g_free(analog.data);
 }
 
@@ -784,7 +767,7 @@ static void LIBUSB_CALL receive_transfer(struct libusb_transfer *transfer)
 	num_samples = transfer->actual_length / 2;
 
 	sr_spew("Got %d-%d/%d samples in frame.", devc->samp_received + 1,
-		   devc->samp_received + num_samples, devc->framesize);
+		devc->samp_received + num_samples, devc->framesize);
 
 	/*
 	 * The device always sends a full frame, but the beginning of the frame
@@ -815,7 +798,7 @@ static void LIBUSB_CALL receive_transfer(struct libusb_transfer *transfer)
 
 			/* The rest of this chunk starts with the trigger point. */
 			sr_dbg("Reached trigger point, %d samples buffered.",
-				   devc->samp_buffered);
+				devc->samp_buffered);
 
 			/* Avoid the corner case where the chunk ended at
 			 * exactly the trigger point. */
@@ -839,12 +822,12 @@ static void LIBUSB_CALL receive_transfer(struct libusb_transfer *transfer)
 		/* That was the last chunk in this frame. Send the buffered
 		 * pre-trigger samples out now, in one big chunk. */
 		sr_dbg("End of frame, sending %d pre-trigger buffered samples.",
-			   devc->samp_buffered);
+			devc->samp_buffered);
 		send_chunk(sdi, devc->framebuf, devc->samp_buffered);
 
 		/* Mark the end of this frame. */
 		packet.type = SR_DF_FRAME_END;
-		sr_session_send(devc->cb_data, &packet);
+		sr_session_send(sdi, &packet);
 
 		if (devc->limit_frames && ++devc->num_frames == devc->limit_frames) {
 			/* Terminate session */
@@ -883,8 +866,7 @@ static int handle_event(int fd, int revents, void *cb_data)
 		 */
 		usb_source_remove(sdi->session, drvc->sr_ctx);
 
-		packet.type = SR_DF_END;
-		sr_session_send(sdi, &packet);
+		std_session_send_df_end(sdi);
 
 		devc->dev_state = IDLE;
 
@@ -935,7 +917,7 @@ static int handle_event(int fd, int revents, void *cb_data)
 		/* Remember where in the captured frame the trigger is. */
 		devc->trigger_offset = trigger_offset;
 
-		num_channels = (devc->ch1_enabled && devc->ch2_enabled) ? 2 : 1;
+		num_channels = (devc->ch_enabled[0] && devc->ch_enabled[1]) ? 2 : 1;
 		devc->framebuf = g_malloc(devc->framesize * num_channels * 2);
 		devc->samp_buffered = devc->samp_received = 0;
 
@@ -968,7 +950,7 @@ static int handle_event(int fd, int revents, void *cb_data)
 	return TRUE;
 }
 
-static int dev_acquisition_start(const struct sr_dev_inst *sdi, void *cb_data)
+static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 {
 	struct dev_context *devc;
 	struct sr_dev_driver *di = sdi->driver;
@@ -978,7 +960,6 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi, void *cb_data)
 		return SR_ERR_DEV_CLOSED;
 
 	devc = sdi->priv;
-	devc->cb_data = cb_data;
 
 	if (configure_channels(sdi) != SR_OK) {
 		sr_err("Failed to configure channels.");
@@ -994,17 +975,14 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi, void *cb_data)
 	devc->dev_state = CAPTURE;
 	usb_source_add(sdi->session, drvc->sr_ctx, TICK, handle_event, (void *)sdi);
 
-	/* Send header packet to the session bus. */
-	std_session_send_df_header(cb_data, LOG_PREFIX);
+	std_session_send_df_header(sdi);
 
 	return SR_OK;
 }
 
-static int dev_acquisition_stop(struct sr_dev_inst *sdi, void *cb_data)
+static int dev_acquisition_stop(struct sr_dev_inst *sdi)
 {
 	struct dev_context *devc;
-
-	(void)cb_data;
 
 	if (sdi->status != SR_ST_ACTIVE)
 		return SR_ERR;
@@ -1015,14 +993,14 @@ static int dev_acquisition_stop(struct sr_dev_inst *sdi, void *cb_data)
 	return SR_OK;
 }
 
-SR_PRIV struct sr_dev_driver hantek_dso_driver_info = {
+static struct sr_dev_driver hantek_dso_driver_info = {
 	.name = "hantek-dso",
 	.longname = "Hantek DSO",
 	.api_version = 1,
-	.init = init,
-	.cleanup = cleanup,
+	.init = std_init,
+	.cleanup = std_cleanup,
 	.scan = scan,
-	.dev_list = dev_list,
+	.dev_list = std_dev_list,
 	.dev_clear = dev_clear,
 	.config_get = config_get,
 	.config_set = config_set,
@@ -1033,3 +1011,4 @@ SR_PRIV struct sr_dev_driver hantek_dso_driver_info = {
 	.dev_acquisition_stop = dev_acquisition_stop,
 	.context = NULL,
 };
+SR_REGISTER_DEV_DRIVER(hantek_dso_driver_info);

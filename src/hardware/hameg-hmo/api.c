@@ -24,10 +24,11 @@
 
 #define SERIALCOMM "115200/8n1/flow=1"
 
-SR_PRIV struct sr_dev_driver hameg_hmo_driver_info;
+static struct sr_dev_driver hameg_hmo_driver_info;
 
 static const char *manufacturers[] = {
 	"HAMEG",
+	"Rohde&Schwarz",
 };
 
 static const uint32_t drvopts[] = {
@@ -45,11 +46,6 @@ enum {
 	CG_ANALOG,
 	CG_DIGITAL,
 };
-
-static int init(struct sr_dev_driver *di, struct sr_context *sr_ctx)
-{
-	return std_init(sr_ctx, di, LOG_PREFIX);
-}
 
 static int check_manufacturer(const char *manufacturer)
 {
@@ -102,10 +98,8 @@ static struct sr_dev_inst *hmo_probe_serial_device(struct sr_scpi_dev_inst *scpi
 	return sdi;
 
 fail:
-	if (hw_info)
-		sr_scpi_hw_info_free(hw_info);
-	if (sdi)
-		sr_dev_inst_free(sdi);
+	sr_scpi_hw_info_free(hw_info);
+	sr_dev_inst_free(sdi);
 	g_free(devc);
 
 	return NULL;
@@ -114,11 +108,6 @@ fail:
 static GSList *scan(struct sr_dev_driver *di, GSList *options)
 {
 	return sr_scpi_scan(di->context, options, hmo_probe_serial_device);
-}
-
-static GSList *dev_list(const struct sr_dev_driver *di)
-{
-	return ((struct drv_context *)(di->context))->instances;
 }
 
 static void clear_helper(void *priv)
@@ -165,13 +154,6 @@ static int dev_close(struct sr_dev_inst *sdi)
 	return SR_OK;
 }
 
-static int cleanup(const struct sr_dev_driver *di)
-{
-	dev_clear(di);
-
-	return SR_OK;
-}
-
 static int check_channel_group(struct dev_context *devc,
 			     const struct sr_channel_group *cg)
 {
@@ -205,8 +187,10 @@ static int config_get(uint32_t key, GVariant **data, const struct sr_dev_inst *s
 	const struct scope_config *model;
 	struct scope_state *state;
 
-	if (!sdi || !(devc = sdi->priv))
+	if (!sdi)
 		return SR_ERR_ARG;
+
+	devc = sdi->priv;
 
 	if ((cg_type = check_channel_group(devc, cg)) == CG_INVALID)
 		return SR_ERR;
@@ -334,8 +318,10 @@ static int config_set(uint32_t key, GVariant *data, const struct sr_dev_inst *sd
 	double tmp_d;
 	gboolean update_sample_rate;
 
-	if (!sdi || !(devc = sdi->priv))
+	if (!sdi)
 		return SR_ERR_ARG;
+
+	devc = sdi->priv;
 
 	if ((cg_type = check_channel_group(devc, cg)) == CG_INVALID)
 		return SR_ERR;
@@ -436,17 +422,17 @@ static int config_set(uint32_t key, GVariant *data, const struct sr_dev_inst *sd
 		break;
 	case SR_CONF_TRIGGER_SLOPE:
 		tmp = g_variant_get_string(data, NULL);
+		for (i = 0; (*model->trigger_slopes)[i]; i++) {
+			if (g_strcmp0(tmp, (*model->trigger_slopes)[i]) != 0)
+				continue;
+			state->trigger_slope = i;
+			g_snprintf(command, sizeof(command),
+				   (*model->scpi_dialect)[SCPI_CMD_SET_TRIGGER_SLOPE],
+				   (*model->trigger_slopes)[i]);
 
-		if (!tmp || !(tmp[0] == 'f' || tmp[0] == 'r'))
-			return SR_ERR_ARG;
-
-		state->trigger_slope = (tmp[0] == 'r') ? 0 : 1;
-
-		g_snprintf(command, sizeof(command),
-			   (*model->scpi_dialect)[SCPI_CMD_SET_TRIGGER_SLOPE],
-			   (state->trigger_slope == 0) ? "POS" : "NEG");
-
-		ret = sr_scpi_send(sdi->conn, command);
+			ret = sr_scpi_send(sdi->conn, command);
+			break;
+		}
 		break;
 	case SR_CONF_COUPLING:
 		if (cg_type == CG_NONE) {
@@ -499,7 +485,8 @@ static int config_list(uint32_t key, GVariant **data, const struct sr_dev_inst *
 	struct dev_context *devc = NULL;
 	const struct scope_config *model = NULL;
 
-	if (sdi && (devc = sdi->priv)) {
+	if (sdi) {
+		devc = sdi->priv;
 		if ((cg_type = check_channel_group(devc, cg)) == CG_INVALID)
 			return SR_ERR;
 
@@ -579,6 +566,11 @@ SR_PRIV int hmo_request_data(const struct sr_dev_inst *sdi)
 	case SR_CHANNEL_ANALOG:
 		g_snprintf(command, sizeof(command),
 			   (*model->scpi_dialect)[SCPI_CMD_GET_ANALOG_DATA],
+#ifdef WORDS_BIGENDIAN
+			   "MSBF",
+#else
+			   "LSBF",
+#endif
 			   ch->index + 1);
 		break;
 	case SR_CHANNEL_LOGIC:
@@ -598,34 +590,50 @@ static int hmo_check_channels(GSList *channels)
 {
 	GSList *l;
 	struct sr_channel *ch;
-	gboolean enabled_pod1, enabled_pod2, enabled_chan3, enabled_chan4;
+	gboolean enabled_chan[MAX_ANALOG_CHANNEL_COUNT];
+	gboolean enabled_pod[MAX_DIGITAL_GROUP_COUNT];
+	size_t idx;
 
-	enabled_pod1 = enabled_pod2 = enabled_chan3 = enabled_chan4 = FALSE;
+	/* Preset "not enabled" for all channels / pods. */
+	for (idx = 0; idx < ARRAY_SIZE(enabled_chan); idx++)
+		enabled_chan[idx] = FALSE;
+	for (idx = 0; idx < ARRAY_SIZE(enabled_pod); idx++)
+		enabled_pod[idx] = FALSE;
 
+	/*
+	 * Determine which channels / pods are required for the caller's
+	 * specified configuration.
+	 */
 	for (l = channels; l; l = l->next) {
 		ch = l->data;
 		switch (ch->type) {
 		case SR_CHANNEL_ANALOG:
-			if (ch->index == 2)
-				enabled_chan3 = TRUE;
-			else if (ch->index == 3)
-				enabled_chan4 = TRUE;
+			idx = ch->index;
+			if (idx < ARRAY_SIZE(enabled_chan))
+				enabled_chan[idx] = TRUE;
 			break;
 		case SR_CHANNEL_LOGIC:
-			if (ch->index < 8)
-				enabled_pod1 = TRUE;
-			else
-				enabled_pod2 = TRUE;
+			idx = ch->index / 8;
+			if (idx < ARRAY_SIZE(enabled_pod))
+				enabled_pod[idx] = TRUE;
 			break;
 		default:
 			return SR_ERR;
 		}
 	}
 
-	if ((enabled_pod1 && enabled_chan3) ||
-	    (enabled_pod2 && enabled_chan4))
+	/*
+	 * Check for resource conflicts. Some channels can be either
+	 * analog or digital, but never both at the same time.
+	 *
+	 * Note that the constraints might depend on the specific model.
+	 * These tests might need some adjustment when support for more
+	 * models gets added to the driver.
+	 */
+	if (enabled_pod[0] && enabled_chan[2])
 		return SR_ERR;
-
+	if (enabled_pod[1] && enabled_chan[3])
+		return SR_ERR;
 	return SR_OK;
 }
 
@@ -709,72 +717,99 @@ static int hmo_setup_channels(const struct sr_dev_inst *sdi)
 	return SR_OK;
 }
 
-static int dev_acquisition_start(const struct sr_dev_inst *sdi, void *cb_data)
+static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 {
 	GSList *l;
-	gboolean digital_added;
+	gboolean digital_added[MAX_DIGITAL_GROUP_COUNT];
+	size_t group, pod_count;
 	struct sr_channel *ch;
 	struct dev_context *devc;
 	struct sr_scpi_dev_inst *scpi;
+	int ret;
 
 	if (sdi->status != SR_ST_ACTIVE)
 		return SR_ERR_DEV_CLOSED;
 
 	scpi = sdi->conn;
 	devc = sdi->priv;
-	digital_added = FALSE;
 
+	/* Preset empty results. */
+	for (group = 0; group < ARRAY_SIZE(digital_added); group++)
+		digital_added[group] = FALSE;
 	g_slist_free(devc->enabled_channels);
 	devc->enabled_channels = NULL;
 
+	/*
+	 * Contruct the list of enabled channels. Determine the highest
+	 * number of digital pods involved in the acquisition.
+	 */
+	pod_count = 0;
 	for (l = sdi->channels; l; l = l->next) {
 		ch = l->data;
 		if (!ch->enabled)
 			continue;
-		/* Only add a single digital channel. */
-		if (ch->type != SR_CHANNEL_LOGIC || !digital_added) {
+		/* Only add a single digital channel per group (pod). */
+		group = ch->index / 8;
+		if (ch->type != SR_CHANNEL_LOGIC || !digital_added[group]) {
 			devc->enabled_channels = g_slist_append(
 					devc->enabled_channels, ch);
-			if (ch->type == SR_CHANNEL_LOGIC)
-				digital_added = TRUE;
+			if (ch->type == SR_CHANNEL_LOGIC) {
+				digital_added[group] = TRUE;
+				if (pod_count < group + 1)
+					pod_count = group + 1;
+			}
 		}
 	}
-
 	if (!devc->enabled_channels)
 		return SR_ERR;
+	devc->pod_count = pod_count;
+	devc->logic_data = NULL;
 
+	/*
+	 * Check constraints. Some channels can be either analog or
+	 * digital, but not both at the same time.
+	 */
 	if (hmo_check_channels(devc->enabled_channels) != SR_OK) {
 		sr_err("Invalid channel configuration specified!");
-		return SR_ERR_NA;
+		ret = SR_ERR_NA;
+		goto free_enabled;
 	}
 
+	/*
+	 * Configure the analog and digital channels and the
+	 * corresponding digital pods.
+	 */
 	if (hmo_setup_channels(sdi) != SR_OK) {
 		sr_err("Failed to setup channel configuration!");
-		return SR_ERR;
+		ret = SR_ERR;
+		goto free_enabled;
 	}
 
+	/*
+	 * Start acquisition on the first enabled channel. The
+	 * receive routine will continue driving the acquisition.
+	 */
 	sr_scpi_source_add(sdi->session, scpi, G_IO_IN, 50,
 			hmo_receive_data, (void *)sdi);
 
-	/* Send header packet to the session bus. */
-	std_session_send_df_header(cb_data, LOG_PREFIX);
+	std_session_send_df_header(sdi);
 
 	devc->current_channel = devc->enabled_channels;
 
 	return hmo_request_data(sdi);
+
+free_enabled:
+	g_slist_free(devc->enabled_channels);
+	devc->enabled_channels = NULL;
+	return ret;
 }
 
-static int dev_acquisition_stop(struct sr_dev_inst *sdi, void *cb_data)
+static int dev_acquisition_stop(struct sr_dev_inst *sdi)
 {
 	struct dev_context *devc;
 	struct sr_scpi_dev_inst *scpi;
-	struct sr_datafeed_packet packet;
 
-	(void)cb_data;
-
-	packet.type = SR_DF_END;
-	packet.payload = NULL;
-	sr_session_send(sdi, &packet);
+	std_session_send_df_end(sdi);
 
 	if (sdi->status != SR_ST_ACTIVE)
 		return SR_ERR_DEV_CLOSED;
@@ -790,14 +825,14 @@ static int dev_acquisition_stop(struct sr_dev_inst *sdi, void *cb_data)
 	return SR_OK;
 }
 
-SR_PRIV struct sr_dev_driver hameg_hmo_driver_info = {
+static struct sr_dev_driver hameg_hmo_driver_info = {
 	.name = "hameg-hmo",
 	.longname = "Hameg HMO",
 	.api_version = 1,
-	.init = init,
-	.cleanup = cleanup,
+	.init = std_init,
+	.cleanup = std_cleanup,
 	.scan = scan,
-	.dev_list = dev_list,
+	.dev_list = std_dev_list,
 	.dev_clear = dev_clear,
 	.config_get = config_get,
 	.config_set = config_set,
@@ -808,3 +843,4 @@ SR_PRIV struct sr_dev_driver hameg_hmo_driver_info = {
 	.dev_acquisition_stop = dev_acquisition_stop,
 	.context = NULL,
 };
+SR_REGISTER_DEV_DRIVER(hameg_hmo_driver_info);

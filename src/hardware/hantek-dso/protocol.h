@@ -19,8 +19,8 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef LIBSIGROK_HARDWARE_HANTEK_DSO_DSO_H
-#define LIBSIGROK_HARDWARE_HANTEK_DSO_DSO_H
+#ifndef LIBSIGROK_HARDWARE_HANTEK_DSO_PROTOCOL_H
+#define LIBSIGROK_HARDWARE_HANTEK_DSO_PROTOCOL_H
 
 #define LOG_PREFIX "hantek-dso"
 
@@ -162,7 +162,6 @@ struct dso_profile {
 
 struct dev_context {
 	const struct dso_profile *profile;
-	void *cb_data;
 	uint64_t limit_frames;
 	uint64_t num_frames;
 	GSList *enabled_channels;
@@ -178,8 +177,7 @@ struct dev_context {
 
 	/* Oscilloscope settings. */
 	int timebase;
-	gboolean ch1_enabled;
-	gboolean ch2_enabled;
+	gboolean ch_enabled[2];
 	int voltage[2];
 	int coupling[2];
 	// voltage offset (vertical position)
