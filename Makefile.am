@@ -311,7 +311,7 @@ src_libdrivers_la_SOURCES += \
 	src/hardware/hameg-hmo/api.c
 endif
 if HW_HANTEK_4032L
-libsigrok_la_SOURCES += \
+src_libdrivers_la_SOURCES += \
 	src/hardware/hantek-4032l/protocol.h \
 	src/hardware/hantek-4032l/protocol.c \
 	src/hardware/hantek-4032l/api.c

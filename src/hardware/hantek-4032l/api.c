@@ -471,3 +471,4 @@ SR_PRIV struct sr_dev_driver hantek_4032l_driver_info = {
 	.dev_acquisition_stop = dev_acquisition_stop,
 	.context = NULL,
 };
+SR_REGISTER_DEV_DRIVER(hantek_4032l_driver_info);
