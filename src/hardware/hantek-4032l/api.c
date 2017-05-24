@@ -35,6 +35,7 @@ static const uint32_t s_h4032l_api_device_options[] = {
 	SR_CONF_LIMIT_SAMPLES | SR_CONF_SET | SR_CONF_GET,
 	SR_CONF_TRIGGER_MATCH | SR_CONF_LIST,
 	SR_CONF_CONN | SR_CONF_GET,
+	SR_CONF_VOLTAGE_THRESHOLD | SR_CONF_SET | SR_CONF_LIST,
 };
 
 static const int32_t s_h4032l_api_triggers[] = {
@@ -319,6 +320,13 @@ static int config_set(uint32_t key, GVariant *data,
 				command_packet->sample_size=number_samples;
 				return SR_OK;
 			}
+	case SR_CONF_VOLTAGE_THRESHOLD: {
+				double d1,d2;
+				g_variant_get(data, "(dd)", &d1, &d2);
+				device_context->command_packet.pwm_a=h4032l_protocol_voltage2pwm(d1);
+				device_context->command_packet.pwm_b=h4032l_protocol_voltage2pwm(d2);
+				return SR_OK;
+			}
 	}
 
 	return SR_ERR_NA;
@@ -330,6 +338,7 @@ static int config_list(uint32_t key, GVariant **data,
 	(void)cg;
 
 	GVariantBuilder var;
+	GVariant *gvar, *range[2];
 
 	switch (key) {
 		case SR_CONF_SCAN_OPTIONS: 
@@ -352,6 +361,15 @@ static int config_list(uint32_t key, GVariant **data,
 			return SR_OK; 
 		case SR_CONF_TRIGGER_MATCH:
 			*data = g_variant_new_fixed_array(G_VARIANT_TYPE_INT32, s_h4032l_api_triggers, ARRAY_SIZE(s_h4032l_api_triggers), sizeof(int32_t));
+			return SR_OK; 
+		case SR_CONF_VOLTAGE_THRESHOLD:
+			g_variant_builder_init(&var, G_VARIANT_TYPE_ARRAY);
+			range[0] = g_variant_new_double(2.5);
+			range[1] = g_variant_new_double(2.5);
+			gvar = g_variant_new_tuple(range, 2);
+			g_variant_builder_add_value(&var, gvar);
+			*data = g_variant_builder_end(&var);
+			
 			return SR_OK; 
 	}
 
