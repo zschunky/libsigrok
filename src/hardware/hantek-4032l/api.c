@@ -407,6 +407,9 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 		command_packet->trigger[0].data_range_mask=0;
 		command_packet->trigger[0].data_range_max=0;
 
+		// initialize range mask values
+		uint32_t range_mask=0;
+		uint32_t range_value=0;
 
 		GSList *channel=stage1->matches;
 		while (channel) {
@@ -414,13 +417,11 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 
 			switch (match->match) {
 				case SR_TRIGGER_ZERO:
-					command_packet->trigger[0].flags.data_range_enabled=1;
-					command_packet->trigger[0].data_range_mask|=(1<<match->channel->index);
+					range_mask|=(1<<match->channel->index);
 					break;
 				case SR_TRIGGER_ONE:
-					command_packet->trigger[0].flags.data_range_enabled=1;
-					command_packet->trigger[0].data_range_mask|=(1<<match->channel->index);
-					command_packet->trigger[0].data_range_max|=(1<<match->channel->index);
+					range_mask|=(1<<match->channel->index);
+					range_value|=(1<<match->channel->index);
 					break;
 				case SR_TRIGGER_RISING:
 					if (command_packet->trigger[0].flags.edge_type!=H4032L_PROTOCOL_TRIGGER_EDGE_TYPE_DISABLED) {
@@ -452,6 +453,27 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 			}
 
 			channel=channel->next;
+		}
+
+		// commpres range mask value and apply range settings
+		if (range_mask) {
+			command_packet->trigger[0].flags.data_range_enabled=1;
+			command_packet->trigger[0].data_range_mask|=(range_mask);
+
+			uint32_t new_range_value=0;
+			uint32_t bit_mask=1;
+			while (range_mask) {
+				if ((range_mask & 1) != 0) {
+					new_range_value<<=1;
+					if ((range_value & 1) != 0)
+						new_range_value|=bit_mask;
+					bit_mask<<=1;
+				}
+				range_mask >>= 1;
+				range_value >>= 1;
+			}
+			command_packet->trigger[0].data_range_max|=range_value;
+
 		}
 	}
 
