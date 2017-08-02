@@ -20,24 +20,19 @@
 #include <config.h>
 #include "protocol.h"
 
-static const uint32_t drvopts[] = {
-	/* Device class */
-	SR_CONF_POWER_SUPPLY,
-};
-
 static const uint32_t scanopts[] = {
 	SR_CONF_CONN,
 	SR_CONF_SERIALCOMM,
 };
 
-static const uint32_t devopts[] = {
-	/* Device class */
+static const uint32_t drvopts[] = {
 	SR_CONF_POWER_SUPPLY,
-	/* Acquisition modes. */
+};
+
+static const uint32_t devopts[] = {
 	SR_CONF_CONTINUOUS,
 	SR_CONF_LIMIT_SAMPLES | SR_CONF_GET | SR_CONF_SET,
 	SR_CONF_LIMIT_MSEC | SR_CONF_GET | SR_CONF_SET,
-	/* Device configuration */
 	SR_CONF_VOLTAGE | SR_CONF_GET,
 	SR_CONF_VOLTAGE_TARGET | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
 	SR_CONF_CURRENT | SR_CONF_GET,
@@ -130,7 +125,6 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 	sr_dbg("Found: %s %s (idx %d, ID '%s').", models[model_id].vendor,
 		models[model_id].name, model_id, models[model_id].id);
 
-	/* Init device instance, etc. */
 	sdi = g_malloc0(sizeof(struct sr_dev_inst));
 	sdi->status = SR_ST_INACTIVE;
 	sdi->vendor = g_strdup(models[model_id].vendor);
@@ -220,9 +214,6 @@ static int config_set(uint32_t key, GVariant *data,
 
 	(void)cg;
 
-	if (sdi->status != SR_ST_ACTIVE)
-		return SR_ERR_DEV_CLOSED;
-
 	devc = sdi->priv;
 
 	switch (key) {
@@ -280,57 +271,18 @@ static int config_list(uint32_t key, GVariant **data,
 	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
 {
 	struct dev_context *devc;
-	GVariant *gvar;
-	GVariantBuilder gvb;
-	double dval;
-	int idx;
 
-	(void)cg;
-
-	/* Always available (with or without sdi). */
-	if (key == SR_CONF_SCAN_OPTIONS) {
-		*data = g_variant_new_fixed_array(G_VARIANT_TYPE_UINT32,
-			scanopts, ARRAY_SIZE(scanopts), sizeof(uint32_t));
-		return SR_OK;
-	}
-
-	/* Return drvopts without sdi (and devopts with sdi, see below). */
-	if (key == SR_CONF_DEVICE_OPTIONS && !sdi) {
-		*data = g_variant_new_fixed_array(G_VARIANT_TYPE_UINT32,
-			drvopts, ARRAY_SIZE(drvopts), sizeof(uint32_t));
-		return SR_OK;
-	}
-
-	/* Every other key needs an sdi. */
-	if (!sdi)
-		return SR_ERR_ARG;
-
-	devc = sdi->priv;
+	devc = (sdi) ? sdi->priv : NULL;
 
 	switch (key) {
+	case SR_CONF_SCAN_OPTIONS:
 	case SR_CONF_DEVICE_OPTIONS:
-		*data = g_variant_new_fixed_array(G_VARIANT_TYPE_UINT32,
-			devopts, ARRAY_SIZE(devopts), sizeof(uint32_t));
-		break;
+		return STD_CONFIG_LIST(key, data, sdi, cg, scanopts, drvopts, devopts);
 	case SR_CONF_VOLTAGE_TARGET:
-		g_variant_builder_init(&gvb, G_VARIANT_TYPE_ARRAY);
-		/* Min, max, step. */
-		for (idx = 0; idx < 3; idx++) {
-			dval = devc->model->voltage[idx];
-			gvar = g_variant_new_double(dval);
-			g_variant_builder_add_value(&gvb, gvar);
-		}
-		*data = g_variant_builder_end(&gvb);
+		*data = std_gvar_min_max_step_array(devc->model->voltage);
 		break;
 	case SR_CONF_CURRENT_LIMIT:
-		g_variant_builder_init(&gvb, G_VARIANT_TYPE_ARRAY);
-		/* Min, max, step. */
-		for (idx = 0; idx < 3; idx++) {
-			dval = devc->model->current[idx];
-			gvar = g_variant_new_double(dval);
-			g_variant_builder_add_value(&gvb, gvar);
-		}
-		*data = g_variant_builder_end(&gvb);
+		*data = std_gvar_min_max_step_array(devc->model->current);
 		break;
 	default:
 		return SR_ERR_NA;
@@ -343,9 +295,6 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 {
 	struct dev_context *devc;
 	struct sr_serial_dev_inst *serial;
-
-	if (sdi->status != SR_ST_ACTIVE)
-		return SR_ERR_DEV_CLOSED;
 
 	devc = sdi->priv;
 
@@ -370,6 +319,7 @@ static struct sr_dev_driver korad_kaxxxxp_driver_info = {
 	.cleanup = std_cleanup,
 	.scan = scan,
 	.dev_list = std_dev_list,
+	.dev_clear = std_dev_clear,
 	.config_get = config_get,
 	.config_set = config_set,
 	.config_list = config_list,

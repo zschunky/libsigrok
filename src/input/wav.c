@@ -197,7 +197,7 @@ static void send_chunk(const struct sr_input *in, int offset, int num_samples)
 
 	s = in->buf->str + offset;
 	d = (char *)fdata;
-	memset(fdata, 0, CHUNK_SIZE);
+	memset(fdata, 0, CHUNK_SIZE * sizeof(float));
 	total_samples = num_samples * inc->num_channels;
 	for (samplenum = 0; samplenum < total_samples; samplenum++) {
 		if (inc->fmt_code == WAVE_FORMAT_PCM_) {
@@ -331,7 +331,7 @@ static int receive(struct sr_input *in, GString *buf)
 			return ret;
 
 		for (int i = 0; i < inc->num_channels; i++) {
-			snprintf(channelname, 8, "CH%d", i + 1);
+			snprintf(channelname, sizeof(channelname), "CH%d", i + 1);
 			sr_channel_new(in->sdi, i, SR_CHANNEL_ANALOG, TRUE, channelname);
 		}
 

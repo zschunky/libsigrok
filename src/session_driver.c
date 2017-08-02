@@ -44,7 +44,7 @@ struct session_vdev {
 	int bytes_read;
 	uint64_t samplerate;
 	int unitsize;
-	int num_channels;
+	int num_logic_channels;
 	int num_analog_channels;
 	int cur_analog_channel;
 	GArray *analog_channels;
@@ -92,7 +92,7 @@ static gboolean stream_session_data(struct sr_dev_inst *sdi)
 				sr_dbg("Opened %s.", vdev->capturefile);
 			} else {
 				/* Try as first chunk filename. */
-				snprintf(capturefile, 15, "%s-1", vdev->capturefile);
+				snprintf(capturefile, sizeof(capturefile) - 1, "%s-1", vdev->capturefile);
 				if (zip_stat(vdev->archive, capturefile, 0, &zs) != -1) {
 					vdev->cur_chunk = 1;
 					if (!(vdev->capfile = zip_fopen(vdev->archive,
@@ -108,7 +108,7 @@ static gboolean stream_session_data(struct sr_dev_inst *sdi)
 		} else {
 			/* Capture data is chunked, advance to the next chunk. */
 			vdev->cur_chunk++;
-			snprintf(capturefile, 15, "%s-%d", vdev->capturefile,
+			snprintf(capturefile, sizeof(capturefile) - 1, "%s-%d", vdev->capturefile,
 					vdev->cur_chunk);
 			if (zip_stat(vdev->archive, capturefile, 0, &zs) != -1) {
 				if (!(vdev->capfile = zip_fopen(vdev->archive,
@@ -117,14 +117,24 @@ static gboolean stream_session_data(struct sr_dev_inst *sdi)
 				sr_dbg("Opened %s.", capturefile);
 			} else if (vdev->cur_analog_channel < vdev->num_analog_channels) {
 				vdev->capturefile = g_strdup_printf("analog-1-%d",
-						vdev->num_channels + vdev->cur_analog_channel + 1);
+						vdev->num_logic_channels + vdev->cur_analog_channel + 1);
 				vdev->cur_analog_channel++;
 				vdev->cur_chunk = 0;
 				return TRUE;
 			} else {
 				/* We got all the chunks, finish up. */
 				g_free(vdev->capturefile);
-				vdev->capturefile = NULL;
+
+				/* If the file has logic channels, the initial value for
+				 * capturefile is set by stream_session_data() - however only
+				 * once. In order to not mess this mechanism up, we simulate
+				 * this here if needed. For purely analog files, capturefile
+				 * is not set.
+				 */
+				if (vdev->num_logic_channels)
+					vdev->capturefile = g_strdup("logic-1");
+				else
+					vdev->capturefile = NULL;
 				return FALSE;
 			}
 		}
@@ -213,20 +223,6 @@ static int receive_data(int fd, int revents, void *cb_data)
 
 /* driver callbacks */
 
-static int dev_clear(const struct sr_dev_driver *di)
-{
-	struct drv_context *drvc;
-	GSList *l;
-
-	drvc = di->context;
-	for (l = drvc->instances; l; l = l->next)
-		sr_dev_inst_free(l->data);
-	g_slist_free(drvc->instances);
-	drvc->instances = NULL;
-
-	return SR_OK;
-}
-
 static int dev_open(struct sr_dev_inst *sdi)
 {
 	struct sr_dev_driver *di;
@@ -254,8 +250,8 @@ static int dev_close(struct sr_dev_inst *sdi)
 	return SR_OK;
 }
 
-static int config_get(uint32_t key, GVariant **data, const struct sr_dev_inst *sdi,
-		const struct sr_channel_group *cg)
+static int config_get(uint32_t key, GVariant **data,
+	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
 {
 	struct session_vdev *vdev;
 
@@ -280,8 +276,8 @@ static int config_get(uint32_t key, GVariant **data, const struct sr_dev_inst *s
 	return SR_OK;
 }
 
-static int config_set(uint32_t key, GVariant *data, const struct sr_dev_inst *sdi,
-		const struct sr_channel_group *cg)
+static int config_set(uint32_t key, GVariant *data,
+	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
 {
 	struct session_vdev *vdev;
 
@@ -308,7 +304,7 @@ static int config_set(uint32_t key, GVariant *data, const struct sr_dev_inst *sd
 		vdev->unitsize = g_variant_get_uint64(data);
 		break;
 	case SR_CONF_NUM_LOGIC_CHANNELS:
-		vdev->num_channels = g_variant_get_int32(data);
+		vdev->num_logic_channels = g_variant_get_int32(data);
 		break;
 	case SR_CONF_NUM_ANALOG_CHANNELS:
 		vdev->num_analog_channels = g_variant_get_int32(data);
@@ -320,22 +316,10 @@ static int config_set(uint32_t key, GVariant *data, const struct sr_dev_inst *sd
 	return SR_OK;
 }
 
-static int config_list(uint32_t key, GVariant **data, const struct sr_dev_inst *sdi,
-		const struct sr_channel_group *cg)
+static int config_list(uint32_t key, GVariant **data,
+	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
 {
-	(void)sdi;
-	(void)cg;
-
-	switch (key) {
-	case SR_CONF_DEVICE_OPTIONS:
-		*data = g_variant_new_fixed_array(G_VARIANT_TYPE_UINT32,
-				devopts, ARRAY_SIZE(devopts), sizeof(uint32_t));
-		break;
-	default:
-		return SR_ERR_NA;
-	}
-
-	return SR_OK;
+	return STD_CONFIG_LIST(key, data, sdi, cg, NULL, NULL, devopts);
 }
 
 static int dev_acquisition_start(const struct sr_dev_inst *sdi)
@@ -392,10 +376,10 @@ SR_PRIV struct sr_dev_driver session_driver = {
 	.longname = "Session-emulating driver",
 	.api_version = 1,
 	.init = std_init,
-	.cleanup = dev_clear,
+	.cleanup = std_cleanup,
 	.scan = NULL,
 	.dev_list = NULL,
-	.dev_clear = dev_clear,
+	.dev_clear = std_dev_clear,
 	.config_get = config_get,
 	.config_set = config_set,
 	.config_list = config_list,

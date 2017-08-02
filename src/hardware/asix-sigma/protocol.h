@@ -32,11 +32,17 @@
 
 #define LOG_PREFIX "asix-sigma"
 
+/*
+ * Triggers are not working in this implementation. Stop claiming
+ * support for the feature which effectively is not available, until
+ * the implementation got fixed. Yet keep the code in place and allow
+ * developers to turn on this switch during development.
+ */
+#define ASIX_SIGMA_WITH_TRIGGER	0
+
 #define USB_VENDOR			0xa600
 #define USB_PRODUCT			0xa000
 #define USB_DESCRIPTION			"ASIX SIGMA"
-#define USB_VENDOR_NAME			"ASIX"
-#define USB_MODEL_NAME			"SIGMA"
 
 enum sigma_write_register {
 	WRITE_CLOCK_SELECT	= 0,
@@ -90,8 +96,51 @@ enum sigma_read_register {
 
 #define CHUNK_SIZE		1024
 
+/* WRITE_MODE register fields. */
+#define WMR_SDRAMWRITEEN	(1 << 0)
+#define WMR_SDRAMREADEN		(1 << 1)
+#define WMR_TRGRES		(1 << 2)
+#define WMR_TRGEN		(1 << 3)
+#define WMR_FORCESTOP		(1 << 4)
+#define WMR_TRGSW		(1 << 5)
+/* not used: bit position 6 */
+#define WMR_SDRAMINIT		(1 << 7)
+
+/* READ_MODE register fields. */
+#define RMR_SDRAMWRITEEN	(1 << 0)
+#define RMR_SDRAMREADEN		(1 << 1)
+/* not used: bit position 2 */
+#define RMR_TRGEN		(1 << 3)
+#define RMR_ROUND		(1 << 4)
+#define RMR_TRIGGERED		(1 << 5)
+#define RMR_POSTTRIGGERED	(1 << 6)
+/* not used: bit position 7 */
+
 /*
- * The entire ASIX Sigma DRAM is an array of struct sigma_dram_line[1024];
+ * Layout of the sample data DRAM, which will be downloaded to the PC:
+ *
+ * Sigma memory is organized in 32K rows. Each row contains 64 clusters.
+ * Each cluster contains a timestamp (16bit) and 7 samples (16bits each).
+ * Total memory size is 32K x 64 x 8 x 2 bytes == 32 MB (256 Mbit).
+ *
+ * Sample data is represented in 16bit quantities. The first sample in
+ * the cluster corresponds to the cluster's timestamp. Each next sample
+ * corresponds to the timestamp + 1, timestamp + 2, etc (the distance is
+ * one sample period, according to the samplerate). In the absence of
+ * pin level changes, no data is provided (RLE compression). A cluster
+ * is enforced for each 64K ticks of the timestamp, to reliably handle
+ * rollover and determination of the next timestamp of the next cluster.
+ *
+ * For samplerates of 100MHz, there is one 16 bit entity for each 20ns
+ * period (50MHz rate). The 16 bit memory contains 2 samples of up to
+ * 8 channels. Bits of multiple samples are interleaved. For samplerates
+ * of 200MHz one 16bit entity contains 4 samples of up to 4 channels,
+ * each 5ns apart.
+ *
+ * Memory addresses (sample count, trigger position) are kept in 24bit
+ * entities. The upper 15 bit refer to the "row", the lower 9 bit refer
+ * to the "event" within the row. Because there is one timestamp for
+ * seven samples each, one memory row can hold up to 64x7 == 448 samples.
  */
 
 /* One "DRAM cluster" contains a timestamp and 7 samples, 16b total. */
@@ -204,19 +253,18 @@ struct sigma_state {
 	uint16_t lastsample;
 };
 
-/* Private, per-device-instance driver context. */
 struct dev_context {
 	struct ftdi_context ftdic;
 	uint64_t cur_samplerate;
-	uint64_t period_ps;
 	uint64_t limit_msec;
 	uint64_t limit_samples;
-	struct timeval start_tv;
+	uint64_t sent_samples;
+	uint64_t start_time;
 	int cur_firmware;
 	int num_channels;
 	int cur_channels;
 	int samples_per_event;
-	int capture_ratio;
+	uint64_t capture_ratio;
 	struct sigma_trigger trigger;
 	int use_triggers;
 	struct sigma_state state;
@@ -225,11 +273,12 @@ struct dev_context {
 extern SR_PRIV const uint64_t samplerates[];
 extern SR_PRIV const size_t samplerates_count;
 
-SR_PRIV int sigma_write_register(uint8_t reg, uint8_t *data, size_t len, 
+SR_PRIV int sigma_write_register(uint8_t reg, uint8_t *data, size_t len,
 				 struct dev_context *devc);
 SR_PRIV int sigma_set_register(uint8_t reg, uint8_t value, struct dev_context *devc);
 SR_PRIV int sigma_write_trigger_lut(struct triggerlut *lut, struct dev_context *devc);
-SR_PRIV void sigma_clear_helper(void *priv);
+SR_PRIV uint64_t sigma_limit_samples_to_msec(const struct dev_context *devc,
+					     uint64_t limit_samples);
 SR_PRIV int sigma_set_samplerate(const struct sr_dev_inst *sdi, uint64_t samplerate);
 SR_PRIV int sigma_convert_trigger(const struct sr_dev_inst *sdi);
 SR_PRIV int sigma_receive_data(int fd, int revents, void *cb_data);

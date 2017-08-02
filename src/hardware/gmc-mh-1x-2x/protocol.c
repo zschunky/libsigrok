@@ -17,20 +17,11 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-/**
- * @file
- *
- * Gossen Metrawatt Metrahit 1x/2x drivers
- *
- * @internal
- */
-
 #include <config.h>
 #include <math.h>
 #include <string.h>
 #include "protocol.h"
 
-/* Internal Headers */
 static guchar calc_chksum_14(guchar *dta);
 static int chk_msg14(struct sr_dev_inst *sdi);
 
@@ -1175,7 +1166,7 @@ SR_PRIV int gmc_mh_1x_2x_receive_data(int fd, int revents, void *cb_data)
 	}
 
 	if (sr_sw_limits_check(&devc->limits))
-		sdi->driver->dev_acquisition_stop(sdi);
+		sr_dev_acquisition_stop(sdi);
 
 	return TRUE;
 }
@@ -1218,7 +1209,7 @@ SR_PRIV int gmc_mh_2x_receive_data(int fd, int revents, void *cb_data)
 	}
 
 	if (sr_sw_limits_check(&devc->limits))
-		sdi->driver->dev_acquisition_stop(sdi);
+		sr_dev_acquisition_stop(sdi);
 
 	/* Request next data set, if required */
 	if (sdi->status == SR_ST_ACTIVE) {
@@ -1283,9 +1274,7 @@ static void create_cmd_14(guchar addr, guchar func, guchar *params, guchar *buf)
 	}
 }
 
-/** Request one measurement from 2x multimeter (msg 8).
- *
- */
+/** Request one measurement from 2x multimeter (msg 8). */
 int req_meas14(const struct sr_dev_inst *sdi)
 {
 	struct dev_context *devc;
@@ -1361,7 +1350,8 @@ int req_stat14(const struct sr_dev_inst *sdi, gboolean power_on)
 	return SR_OK;
 }
 
-/** Decode model in "send mode".
+/**
+ * Decode model in "send mode".
  *
  * @param[in] mcode Model code.
  * @return Model code.
@@ -1504,9 +1494,6 @@ SR_PRIV int config_set(uint32_t key, GVariant *data, const struct sr_dev_inst *s
 	uint8_t msg[42];
 
 	(void)cg;
-
-	if (sdi->status != SR_ST_ACTIVE)
-		return SR_ERR_DEV_CLOSED;
 
 	devc = sdi->priv;
 

@@ -73,16 +73,13 @@ SR_PRIV int p_ols_open(struct dev_context *devc)
 
 	/* Note: Caller checks devc and devc->ftdic. */
 
-	/* Select interface B, otherwise communication will fail. */
 	ret = ftdi_set_interface(devc->ftdic, INTERFACE_B);
 	if (ret < 0) {
 		sr_err("Failed to set FTDI interface B (%d): %s", ret,
 		       ftdi_get_error_string(devc->ftdic));
 		return SR_ERR;
 	}
-	sr_dbg("FTDI chip interface B set successfully.");
 
-	/* Check for the device and temporarily open it. */
 	ret = ftdi_usb_open_desc(devc->ftdic, USB_VENDOR_ID, USB_DEVICE_ID,
 				 USB_IPRODUCT, NULL);
 	if (ret < 0) {
@@ -92,47 +89,39 @@ SR_PRIV int p_ols_open(struct dev_context *devc)
 			       ftdi_get_error_string(devc->ftdic));
 		return SR_ERR;
 	}
-	sr_dbg("FTDI device opened successfully.");
 
-	/* Purge RX/TX buffers in the FTDI chip. */
 	if ((ret = ftdi_usb_purge_buffers(devc->ftdic)) < 0) {
 		sr_err("Failed to purge FTDI RX/TX buffers (%d): %s.",
 		       ret, ftdi_get_error_string(devc->ftdic));
 		goto err_open_close_ftdic;
 	}
-	sr_dbg("FTDI chip buffers purged successfully.");
 
-	/* Reset the FTDI bitmode. */
 	ret = ftdi_set_bitmode(devc->ftdic, 0xff, BITMODE_RESET);
 	if (ret < 0) {
 		sr_err("Failed to reset the FTDI chip bitmode (%d): %s.",
 		       ret, ftdi_get_error_string(devc->ftdic));
 		goto err_open_close_ftdic;
 	}
-	sr_dbg("FTDI chip bitmode reset successfully.");
 
-	/* Set the FTDI latency timer to 16. */
 	ret = ftdi_set_latency_timer(devc->ftdic, 16);
 	if (ret < 0) {
 		sr_err("Failed to set FTDI latency timer (%d): %s.",
 		       ret, ftdi_get_error_string(devc->ftdic));
 		goto err_open_close_ftdic;
 	}
-	sr_dbg("FTDI chip latency timer set successfully.");
 
-	/* Set the FTDI read data chunk size to 64kB. */
 	ret = ftdi_read_data_set_chunksize(devc->ftdic, 64 * 1024);
 	if (ret < 0) {
 		sr_err("Failed to set FTDI read data chunk size (%d): %s.",
 		       ret, ftdi_get_error_string(devc->ftdic));
 		goto err_open_close_ftdic;
 	}
-	sr_dbg("FTDI chip read data chunk size set successfully.");
-	
+
 	return SR_OK;
 
 err_open_close_ftdic:
 	ftdi_usb_close(devc->ftdic);
+
 	return SR_ERR;
 }
 
@@ -424,7 +413,7 @@ SR_PRIV int p_ols_receive_data(int fd, int revents, void *cb_data)
 		if (bytes_read < 0) {
 			sr_err("Failed to read FTDI data (%d): %s.",
 			       bytes_read, ftdi_get_error_string(devc->ftdic));
-			sdi->driver->dev_acquisition_stop(sdi);
+			sr_dev_acquisition_stop(sdi);
 			return FALSE;
 		}
 		if (bytes_read == 0) {
@@ -443,7 +432,7 @@ SR_PRIV int p_ols_receive_data(int fd, int revents, void *cb_data)
 			sr_spew("Received byte 0x%.2x.", byte);
 
 			if ((devc->flag_reg & FLAG_DEMUX) && (devc->flag_reg & FLAG_RLE)) {
-				/* RLE in demux mode must be processed differently 
+				/* RLE in demux mode must be processed differently
 				* since in this case the RLE encoder is operating on pairs of samples.
 				*/
 				if (devc->num_bytes == num_channels * 2) {
@@ -499,7 +488,7 @@ SR_PRIV int p_ols_receive_data(int fd, int revents, void *cb_data)
 							 * sample.
 							 */
 							devc->tmp_sample[i] = devc->sample[j++];
-						} 
+						}
 					}
 					/* Clear out the most significant bit of the sample */
 					devc->tmp_sample[devc->num_bytes - 1] &= 0x7f;
@@ -517,7 +506,7 @@ SR_PRIV int p_ols_receive_data(int fd, int revents, void *cb_data)
 							 * sample.
 							 */
 							devc->tmp_sample2[i] = devc->sample[j++];
-						} 
+						}
 					}
 					/* Clear out the most significant bit of the sample */
 					devc->tmp_sample2[devc->num_bytes - 1] &= 0x7f;
@@ -597,7 +586,7 @@ SR_PRIV int p_ols_receive_data(int fd, int revents, void *cb_data)
 								 * sample.
 								 */
 								devc->tmp_sample[i] = devc->sample[j++];
-							} 
+							}
 						}
 						memcpy(devc->sample, devc->tmp_sample, 4);
 						sr_spew("Expanded sample: 0x%.8x.", sample);
@@ -672,7 +661,7 @@ SR_PRIV int p_ols_receive_data(int fd, int revents, void *cb_data)
 		}
 		g_free(devc->raw_sample_buf);
 
-		sdi->driver->dev_acquisition_stop(sdi);
+		sr_dev_acquisition_stop(sdi);
 	}
 
 	return TRUE;

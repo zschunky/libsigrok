@@ -35,8 +35,11 @@
 #define UNKNOWN_ADDRESS 0xff
 #define MAX_RENUM_DELAY_MS 3000
 
-static const uint32_t devopts[] = {
+static const uint32_t drvopts[] = {
 	SR_CONF_LOGIC_ANALYZER,
+};
+
+static const uint32_t devopts[] = {
 	SR_CONF_SAMPLERATE | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
 	SR_CONF_CAPTURE_RATIO | SR_CONF_GET | SR_CONF_SET,
 	SR_CONF_TRIGGER_MATCH | SR_CONF_LIST,
@@ -191,9 +194,6 @@ static int open_device(struct sr_dev_inst *sdi)
 	size_t i;
 	int r;
 
-	if (sdi->status == SR_ST_ACTIVE)
-		return SR_ERR;
-
 	drvc = sdi->driver->context;
 	usb = sdi->conn;
 
@@ -340,14 +340,12 @@ static int dev_close(struct sr_dev_inst *sdi)
 	}
 
 	if (!usb->devhdl)
-		return SR_ERR;
+		return SR_ERR_BUG;
 
 	libusb_release_interface(usb->devhdl, 0);
 
 	libusb_close(usb->devhdl);
 	usb->devhdl = NULL;
-
-	sdi->status = SR_ST_INACTIVE;
 
 	return SR_OK;
 }
@@ -390,16 +388,11 @@ static int config_set(uint32_t key, GVariant *data,
 
 	devc = sdi->priv;
 
-	if (sdi->status != SR_ST_ACTIVE)
-		return SR_ERR_DEV_CLOSED;
-
 	switch (key) {
 	case SR_CONF_SAMPLERATE:
 		return lls_set_samplerate(sdi, g_variant_get_uint64(data));
 	case SR_CONF_CAPTURE_RATIO:
 		devc->capture_ratio = g_variant_get_uint64(data);
-		if (devc->capture_ratio > 100)
-			return SR_ERR;
 		break;
 	default:
 		return SR_ERR_NA;
@@ -411,30 +404,14 @@ static int config_set(uint32_t key, GVariant *data,
 static int config_list(uint32_t key, GVariant **data,
 	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
 {
-	GVariantBuilder vb;
-	GVariant *var;
-
-	(void)sdi;
-	(void)cg;
-
 	switch (key) {
 	case SR_CONF_DEVICE_OPTIONS:
-		*data = g_variant_new_fixed_array(G_VARIANT_TYPE_UINT32,
-				devopts, ARRAY_SIZE(devopts),
-				sizeof(uint32_t));
-		break;
+		return STD_CONFIG_LIST(key, data, sdi, cg, NULL, drvopts, devopts);
 	case SR_CONF_SAMPLERATE:
-		g_variant_builder_init(&vb, G_VARIANT_TYPE("a{sv}"));
-		var = g_variant_new_fixed_array(G_VARIANT_TYPE("t"),
-				samplerates, ARRAY_SIZE(samplerates),
-				sizeof(uint64_t));
-		g_variant_builder_add(&vb, "{sv}", "samplerates", var);
-		*data = g_variant_builder_end(&vb);
+		*data = std_gvar_samplerates(ARRAY_AND_SIZE(samplerates));
 		break;
 	case SR_CONF_TRIGGER_MATCH:
-		*data = g_variant_new_fixed_array(G_VARIANT_TYPE_INT32,
-				trigger_matches, ARRAY_SIZE(trigger_matches),
-				sizeof(int32_t));
+		*data = std_gvar_array_i32(ARRAY_AND_SIZE(trigger_matches));
 		break;
 	default:
 		return SR_ERR_NA;
@@ -472,9 +449,6 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 	struct drv_context *drvc;
 	int ret;
 
-	if (sdi->status != SR_ST_ACTIVE)
-		return SR_ERR_DEV_CLOSED;
-
 	drvc = sdi->driver->context;
 
 	if ((ret = lls_start_acquisition(sdi)) < 0)
@@ -488,9 +462,6 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 
 static int dev_acquisition_stop(struct sr_dev_inst *sdi)
 {
-	if (sdi->status != SR_ST_ACTIVE)
-		return SR_ERR_DEV_CLOSED;
-
 	return lls_stop_acquisition(sdi);
 }
 
@@ -502,6 +473,7 @@ static struct sr_dev_driver lecroy_logicstudio_driver_info = {
 	.cleanup = std_cleanup,
 	.scan = scan,
 	.dev_list = std_dev_list,
+	.dev_clear = std_dev_clear,
 	.config_get = config_get,
 	.config_set = config_set,
 	.config_list = config_list,

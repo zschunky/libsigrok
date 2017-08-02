@@ -34,8 +34,11 @@ static const uint32_t scanopts[] = {
 	SR_CONF_SERIALCOMM,
 };
 
-static const uint32_t devopts[] = {
+static const uint32_t drvopts[] = {
 	SR_CONF_MULTIMETER,
+};
+
+static const uint32_t devopts[] = {
 	SR_CONF_CONTINUOUS,
 	SR_CONF_LIMIT_SAMPLES | SR_CONF_SET,
 	SR_CONF_LIMIT_MSEC | SR_CONF_SET,
@@ -137,41 +140,22 @@ scan_cleanup:
 	return std_scan_complete(di, devices);
 }
 
-static int config_set(uint32_t key, GVariant *data, const struct sr_dev_inst *sdi,
-		const struct sr_channel_group *cg)
+static int config_set(uint32_t key, GVariant *data,
+	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
 {
 	struct dev_context *devc;
 
 	(void)cg;
-
-	if (sdi->status != SR_ST_ACTIVE)
-		return SR_ERR_DEV_CLOSED;
 
 	devc = sdi->priv;
 
 	return sr_sw_limits_config_set(&devc->limits, key, data);
 }
 
-static int config_list(uint32_t key, GVariant **data, const struct sr_dev_inst *sdi,
-		const struct sr_channel_group *cg)
+static int config_list(uint32_t key, GVariant **data,
+	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
 {
-	(void)sdi;
-	(void)cg;
-
-	switch (key) {
-	case SR_CONF_SCAN_OPTIONS:
-		*data = g_variant_new_fixed_array(G_VARIANT_TYPE_UINT32,
-				scanopts, ARRAY_SIZE(scanopts), sizeof(uint32_t));
-		break;
-	case SR_CONF_DEVICE_OPTIONS:
-		*data = g_variant_new_fixed_array(G_VARIANT_TYPE_UINT32,
-				devopts, ARRAY_SIZE(devopts), sizeof(uint32_t));
-		break;
-	default:
-		return SR_ERR_NA;
-	}
-
-	return SR_OK;
+	return STD_CONFIG_LIST(key, data, sdi, cg, scanopts, drvopts, devopts);
 }
 
 static int dev_acquisition_start(const struct sr_dev_inst *sdi)
@@ -179,15 +163,11 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 	struct dev_context *devc;
 	struct sr_serial_dev_inst *serial;
 
-	if (sdi->status != SR_ST_ACTIVE)
-		return SR_ERR_DEV_CLOSED;
-
 	devc = sdi->priv;
 
 	sr_sw_limits_acquisition_start(&devc->limits);
 	std_session_send_df_header(sdi);
 
-	/* Poll every 50ms, or whenever some data comes in. */
 	serial = sdi->conn;
 	serial_source_add(sdi->session, serial, G_IO_IN, 50,
 		      receive_data, (void *)sdi);
@@ -206,6 +186,7 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 			.cleanup = std_cleanup, \
 			.scan = scan, \
 			.dev_list = std_dev_list, \
+			.dev_clear = std_dev_clear, \
 			.config_get = NULL, \
 			.config_set = config_set, \
 			.config_list = config_list, \
@@ -396,6 +377,12 @@ SR_REGISTER_DEV_DRIVER_LIST(serial_dmm_drivers,
 	/* }}} */
 	/* fs9922 based meters {{{ */
 	DMM(
+		"sparkfun-70c", fs9922,
+		"SparkFun", "70C", "2400/8n1/rts=0/dtr=1",
+		2400, FS9922_PACKET_SIZE, 0, 0, NULL,
+		sr_fs9922_packet_valid, sr_fs9922_parse, NULL
+	),
+	DMM(
 		"uni-t-ut61b-ser", fs9922,
 		"UNI-T", "UT61B (UT-D02 cable)", "2400/8n1/rts=0/dtr=1",
 		2400, FS9922_PACKET_SIZE, 0, 0, NULL,
@@ -426,14 +413,16 @@ SR_REGISTER_DEV_DRIVER_LIST(serial_dmm_drivers,
 		&sr_fs9922_z1_diode
 	),
 	/* }}} */
-	/* metex14 based meters {{{ */
+	/* m2110 based meters {{{ */
 	DMM(
-		"bbcgm-2010", metex14,
+		"bbcgm-2010", m2110,
 		"BBC Goertz Metrawatt", "M2110", "1200/7n2", 1200,
 		BBCGM_M2110_PACKET_SIZE, 0, 0, NULL,
 		sr_m2110_packet_valid, sr_m2110_parse,
 		NULL
 	),
+	/* }}} */
+	/* metex14 based meters {{{ */
 	DMM(
 		"mastech-mas345", metex14,
 		"MASTECH", "MAS345", "600/7n2/rts=0/dtr=1", 600,

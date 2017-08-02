@@ -101,10 +101,10 @@ struct scpi_pps {
 struct channel_spec {
 	const char *name;
 	/* Min, max, programming resolution, spec digits, encoding digits. */
-	float voltage[5];
-	float current[5];
-	float power[5];
-	float frequency[5];
+	double voltage[5];
+	double current[5];
+	double power[5];
+	double frequency[5];
 };
 
 struct channel_group_spec {
@@ -136,17 +136,13 @@ enum acq_states {
 	STATE_STOP,
 };
 
-/** Private, per-device-instance driver context. */
 struct dev_context {
-	/* Model-specific information */
 	const struct scpi_pps *device;
 
-	/* Operational state */
 	gboolean beeper_was_set;
 	struct channel_spec *channels;
 	struct channel_group_spec *channel_groups;
 
-	/* Temporary state across callbacks */
 	struct sr_channel *cur_channel;
 };
 

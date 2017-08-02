@@ -26,12 +26,6 @@
 #include <config.h>
 #include "protocol.h"
 
-#define USB_VENDOR			0xa600
-#define USB_PRODUCT			0xa000
-#define USB_DESCRIPTION			"ASIX SIGMA"
-#define USB_VENDOR_NAME			"ASIX"
-#define USB_MODEL_NAME			"SIGMA"
-
 /*
  * The ASIX Sigma supports arbitrary integer frequency divider in
  * the 50MHz mode. The divider is in range 1...256 , allowing for
@@ -53,7 +47,7 @@ SR_PRIV const uint64_t samplerates[] = {
 
 SR_PRIV const size_t samplerates_count = ARRAY_SIZE(samplerates);
 
-static const char sigma_firmware_files[][24] = {
+static const char firmware_files[][24] = {
 	/* 50 MHz, supports 8 bit fractions */
 	"asix-sigma-50.fw",
 	/* 100 MHz */
@@ -190,14 +184,16 @@ static int sigma_read_dram(uint16_t startchunk, size_t numchunks,
 {
 	size_t i;
 	uint8_t buf[4096];
-	int idx = 0;
+	int idx;
 
 	/* Send the startchunk. Index start with 1. */
-	buf[0] = startchunk >> 8;
-	buf[1] = startchunk & 0xff;
-	sigma_write_register(WRITE_MEMROW, buf, 2, devc);
+	idx = 0;
+	buf[idx++] = startchunk >> 8;
+	buf[idx++] = startchunk & 0xff;
+	sigma_write_register(WRITE_MEMROW, buf, idx, devc);
 
 	/* Read the DRAM. */
+	idx = 0;
 	buf[idx++] = REG_DRAM_BLOCK;
 	buf[idx++] = REG_DRAM_WAIT_ACK;
 
@@ -276,15 +272,6 @@ SR_PRIV int sigma_write_trigger_lut(struct triggerlut *lut, struct dev_context *
 	return SR_OK;
 }
 
-SR_PRIV void sigma_clear_helper(void *priv)
-{
-	struct dev_context *devc;
-
-	devc = priv;
-
-	ftdi_deinit(&devc->ftdic);
-}
-
 /*
  * Configure the FPGA for bitbang mode.
  * This sequence is documented in section 2. of the ASIX Sigma programming
@@ -334,9 +321,10 @@ static int sigma_fpga_init_bitbang(struct dev_context *devc)
 static int sigma_fpga_init_la(struct dev_context *devc)
 {
 	/* Initialize the logic analyzer mode. */
+	uint8_t mode_regval = WMR_SDRAMINIT;
 	uint8_t logic_mode_start[] = {
 		REG_ADDR_LOW  | (READ_ID & 0xf),
-		REG_ADDR_HIGH | (READ_ID >> 8),
+		REG_ADDR_HIGH | (READ_ID >> 4),
 		REG_READ_ADDR,	/* Read ID register. */
 
 		REG_ADDR_LOW | (WRITE_TEST & 0xf),
@@ -349,8 +337,8 @@ static int sigma_fpga_init_la(struct dev_context *devc)
 		REG_READ_ADDR,	/* Read scratch register. */
 
 		REG_ADDR_LOW | (WRITE_MODE & 0xf),
-		REG_DATA_LOW | 0x0,
-		REG_DATA_HIGH_WRITE | 0x8,
+		REG_DATA_LOW | (mode_regval & 0xf),
+		REG_DATA_HIGH_WRITE | (mode_regval >> 4),
 	};
 
 	uint8_t result[3];
@@ -448,31 +436,28 @@ static int upload_firmware(struct sr_context *ctx,
 	unsigned char *buf;
 	unsigned char pins;
 	size_t buf_size;
-	const char *firmware = sigma_firmware_files[firmware_idx];
-	struct ftdi_context *ftdic = &devc->ftdic;
+	const char *firmware;
 
-	/* Make sure it's an ASIX SIGMA. */
-	ret = ftdi_usb_open_desc(ftdic, USB_VENDOR, USB_PRODUCT,
-				 USB_DESCRIPTION, NULL);
-	if (ret < 0) {
-		sr_err("ftdi_usb_open failed: %s",
-		       ftdi_get_error_string(ftdic));
-		return 0;
+	/* Avoid downloading the same firmware multiple times. */
+	firmware = firmware_files[firmware_idx];
+	if (devc->cur_firmware == firmware_idx) {
+		sr_info("Not uploading firmware file '%s' again.", firmware);
+		return SR_OK;
 	}
 
-	ret = ftdi_set_bitmode(ftdic, 0xdf, BITMODE_BITBANG);
+	ret = ftdi_set_bitmode(&devc->ftdic, 0xdf, BITMODE_BITBANG);
 	if (ret < 0) {
 		sr_err("ftdi_set_bitmode failed: %s",
-		       ftdi_get_error_string(ftdic));
-		return 0;
+		       ftdi_get_error_string(&devc->ftdic));
+		return SR_ERR;
 	}
 
 	/* Four times the speed of sigmalogan - Works well. */
-	ret = ftdi_set_baudrate(ftdic, 750 * 1000);
+	ret = ftdi_set_baudrate(&devc->ftdic, 750 * 1000);
 	if (ret < 0) {
 		sr_err("ftdi_set_baudrate failed: %s",
-		       ftdi_get_error_string(ftdic));
-		return 0;
+		       ftdi_get_error_string(&devc->ftdic));
+		return SR_ERR;
 	}
 
 	/* Initialize the FPGA for firmware upload. */
@@ -494,14 +479,14 @@ static int upload_firmware(struct sr_context *ctx,
 
 	g_free(buf);
 
-	ret = ftdi_set_bitmode(ftdic, 0x00, BITMODE_RESET);
+	ret = ftdi_set_bitmode(&devc->ftdic, 0x00, BITMODE_RESET);
 	if (ret < 0) {
 		sr_err("ftdi_set_bitmode failed: %s",
-		       ftdi_get_error_string(ftdic));
+		       ftdi_get_error_string(&devc->ftdic));
 		return SR_ERR;
 	}
 
-	ftdi_usb_purge_buffers(ftdic);
+	ftdi_usb_purge_buffers(&devc->ftdic);
 
 	/* Discard garbage. */
 	while (sigma_read(&pins, 1, devc) == 1)
@@ -519,12 +504,37 @@ static int upload_firmware(struct sr_context *ctx,
 	return SR_OK;
 }
 
+/*
+ * Sigma doesn't support limiting the number of samples, so we have to
+ * translate the number and the samplerate to an elapsed time.
+ *
+ * In addition we need to ensure that the last data cluster has passed
+ * the hardware pipeline, and became available to the PC side. With RLE
+ * compression up to 327ms could pass before another cluster accumulates
+ * at 200kHz samplerate when input pins don't change.
+ */
+SR_PRIV uint64_t sigma_limit_samples_to_msec(const struct dev_context *devc,
+					     uint64_t limit_samples)
+{
+	uint64_t limit_msec;
+	uint64_t worst_cluster_time_ms;
+
+	limit_msec = limit_samples * 1000 / devc->cur_samplerate;
+	worst_cluster_time_ms = 65536 * 1000 / devc->cur_samplerate;
+	/*
+	 * One cluster time is not enough to flush pipeline when sampling
+	 * grounded pins with 1 sample limit at 200kHz. Hence the 2* fix.
+	 */
+	return limit_msec + 2 * worst_cluster_time_ms;
+}
+
 SR_PRIV int sigma_set_samplerate(const struct sr_dev_inst *sdi, uint64_t samplerate)
 {
 	struct dev_context *devc;
 	struct drv_context *drvc;
 	size_t i;
 	int ret;
+	int num_channels;
 
 	devc = sdi->priv;
 	drvc = sdi->driver->context;
@@ -543,15 +553,16 @@ SR_PRIV int sigma_set_samplerate(const struct sr_dev_inst *sdi, uint64_t sampler
 	 * firmware is required and higher rates might limit the set
 	 * of available channels.
 	 */
+	num_channels = devc->num_channels;
 	if (samplerate <= SR_MHZ(50)) {
 		ret = upload_firmware(drvc->sr_ctx, 0, devc);
-		devc->num_channels = 16;
+		num_channels = 16;
 	} else if (samplerate == SR_MHZ(100)) {
 		ret = upload_firmware(drvc->sr_ctx, 1, devc);
-		devc->num_channels = 8;
+		num_channels = 8;
 	} else if (samplerate == SR_MHZ(200)) {
 		ret = upload_firmware(drvc->sr_ctx, 2, devc);
-		devc->num_channels = 4;
+		num_channels = 4;
 	}
 
 	/*
@@ -560,8 +571,8 @@ SR_PRIV int sigma_set_samplerate(const struct sr_dev_inst *sdi, uint64_t sampler
 	 * an "event" (memory organization internal to the device).
 	 */
 	if (ret == SR_OK) {
+		devc->num_channels = num_channels;
 		devc->cur_samplerate = samplerate;
-		devc->period_ps = 1000000000000ULL / samplerate;
 		devc->samples_per_event = 16 / devc->num_channels;
 		devc->state.state = SIGMA_IDLE;
 	}
@@ -574,7 +585,7 @@ SR_PRIV int sigma_set_samplerate(const struct sr_dev_inst *sdi, uint64_t sampler
 	 */
 	if (ret == SR_OK && devc->limit_samples) {
 		uint64_t msecs;
-		msecs = devc->limit_samples * 1000 / devc->cur_samplerate;
+		msecs = sigma_limit_samples_to_msec(devc, devc->limit_samples);
 		devc->limit_msec = msecs;
 	}
 
@@ -666,7 +677,6 @@ SR_PRIV int sigma_convert_trigger(const struct sr_dev_inst *sdi)
 	return SR_OK;
 }
 
-
 /* Software trigger to determine exact trigger position. */
 static int get_trigger_offset(uint8_t *samples, uint16_t last_sample,
 			      struct sigma_trigger *t)
@@ -708,6 +718,101 @@ static uint16_t sigma_dram_cluster_ts(struct sigma_dram_cluster *cluster)
 	return (cluster->timestamp_hi << 8) | cluster->timestamp_lo;
 }
 
+/*
+ * Return one 16bit data entity of a DRAM cluster at the specified index.
+ */
+static uint16_t sigma_dram_cluster_data(struct sigma_dram_cluster *cl, int idx)
+{
+	uint16_t sample;
+
+	sample = 0;
+	sample |= cl->samples[idx].sample_lo << 0;
+	sample |= cl->samples[idx].sample_hi << 8;
+	sample = (sample >> 8) | (sample << 8);
+	return sample;
+}
+
+/*
+ * Deinterlace sample data that was retrieved at 100MHz samplerate.
+ * One 16bit item contains two samples of 8bits each. The bits of
+ * multiple samples are interleaved.
+ */
+static uint16_t sigma_deinterlace_100mhz_data(uint16_t indata, int idx)
+{
+	uint16_t outdata;
+
+	indata >>= idx;
+	outdata = 0;
+	outdata |= (indata >> (0 * 2 - 0)) & (1 << 0);
+	outdata |= (indata >> (1 * 2 - 1)) & (1 << 1);
+	outdata |= (indata >> (2 * 2 - 2)) & (1 << 2);
+	outdata |= (indata >> (3 * 2 - 3)) & (1 << 3);
+	outdata |= (indata >> (4 * 2 - 4)) & (1 << 4);
+	outdata |= (indata >> (5 * 2 - 5)) & (1 << 5);
+	outdata |= (indata >> (6 * 2 - 6)) & (1 << 6);
+	outdata |= (indata >> (7 * 2 - 7)) & (1 << 7);
+	return outdata;
+}
+
+/*
+ * Deinterlace sample data that was retrieved at 200MHz samplerate.
+ * One 16bit item contains four samples of 4bits each. The bits of
+ * multiple samples are interleaved.
+ */
+static uint16_t sigma_deinterlace_200mhz_data(uint16_t indata, int idx)
+{
+	uint16_t outdata;
+
+	indata >>= idx;
+	outdata = 0;
+	outdata |= (indata >> (0 * 4 - 0)) & (1 << 0);
+	outdata |= (indata >> (1 * 4 - 1)) & (1 << 1);
+	outdata |= (indata >> (2 * 4 - 2)) & (1 << 2);
+	outdata |= (indata >> (3 * 4 - 3)) & (1 << 3);
+	return outdata;
+}
+
+static void store_sr_sample(uint8_t *samples, int idx, uint16_t data)
+{
+	samples[2 * idx + 0] = (data >> 0) & 0xff;
+	samples[2 * idx + 1] = (data >> 8) & 0xff;
+}
+
+/*
+ * Local wrapper around sr_session_send() calls. Make sure to not send
+ * more samples to the session's datafeed than what was requested by a
+ * previously configured (optional) sample count.
+ */
+static void sigma_session_send(struct sr_dev_inst *sdi,
+				struct sr_datafeed_packet *packet)
+{
+	struct dev_context *devc;
+	struct sr_datafeed_logic *logic;
+	uint64_t send_now;
+
+	devc = sdi->priv;
+	if (devc->limit_samples) {
+		logic = (void *)packet->payload;
+		send_now = logic->length / logic->unitsize;
+		if (devc->sent_samples + send_now > devc->limit_samples) {
+			send_now = devc->limit_samples - devc->sent_samples;
+			logic->length = send_now * logic->unitsize;
+		}
+		if (!send_now)
+			return;
+		devc->sent_samples += send_now;
+	}
+
+	sr_session_send(sdi, packet);
+}
+
+/*
+ * This size translates to: event count (1K events per cluster), times
+ * the sample width (unitsize, 16bits per event), times the maximum
+ * number of samples per event.
+ */
+#define SAMPLES_BUFFER_SIZE	(1024 * 2 * 4)
+
 static void sigma_decode_dram_cluster(struct sigma_dram_cluster *dram_cluster,
 				      unsigned int events_in_cluster,
 				      unsigned int triggered,
@@ -717,13 +822,16 @@ static void sigma_decode_dram_cluster(struct sigma_dram_cluster *dram_cluster,
 	struct sigma_state *ss = &devc->state;
 	struct sr_datafeed_packet packet;
 	struct sr_datafeed_logic logic;
-	uint16_t tsdiff, ts;
-	uint8_t samples[2048];
+	uint16_t tsdiff, ts, sample, item16;
+	uint8_t samples[SAMPLES_BUFFER_SIZE];
+	uint8_t *send_ptr;
+	size_t send_count, trig_count;
 	unsigned int i;
+	int j;
 
 	ts = sigma_dram_cluster_ts(dram_cluster);
 	tsdiff = ts - ss->lastts;
-	ss->lastts = ts;
+	ss->lastts = ts + EVENTS_PER_CLUSTER;
 
 	packet.type = SR_DF_LOGIC;
 	packet.payload = &logic;
@@ -731,42 +839,63 @@ static void sigma_decode_dram_cluster(struct sigma_dram_cluster *dram_cluster,
 	logic.data = samples;
 
 	/*
-	 * First of all, send Sigrok a copy of the last sample from
-	 * previous cluster as many times as needed to make up for
-	 * the differential characteristics of data we get from the
-	 * Sigma. Sigrok needs one sample of data per period.
-	 *
-	 * One DRAM cluster contains a timestamp and seven samples,
-	 * the units of timestamp are "devc->period_ps" , the first
-	 * sample in the cluster happens at the time of the timestamp
-	 * and the remaining samples happen at timestamp +1...+6 .
+	 * If this cluster is not adjacent to the previously received
+	 * cluster, then send the appropriate number of samples with the
+	 * previous values to the sigrok session. This "decodes RLE".
 	 */
-	for (ts = 0; ts < tsdiff - (EVENTS_PER_CLUSTER - 1); ts++) {
+	for (ts = 0; ts < tsdiff; ts++) {
 		i = ts % 1024;
-		samples[2 * i + 0] = ss->lastsample & 0xff;
-		samples[2 * i + 1] = ss->lastsample >> 8;
+		store_sr_sample(samples, i, ss->lastsample);
 
 		/*
 		 * If we have 1024 samples ready or we're at the
 		 * end of submitting the padding samples, submit
-		 * the packet to Sigrok.
+		 * the packet to Sigrok. Since constant data is
+		 * sent, duplication of data for rates above 50MHz
+		 * is simple.
 		 */
-		if ((i == 1023) || (ts == (tsdiff - EVENTS_PER_CLUSTER))) {
+		if ((i == 1023) || (ts == tsdiff - 1)) {
 			logic.length = (i + 1) * logic.unitsize;
-			sr_session_send(sdi, &packet);
+			for (j = 0; j < devc->samples_per_event; j++)
+				sigma_session_send(sdi, &packet);
 		}
 	}
 
 	/*
 	 * Parse the samples in current cluster and prepare them
-	 * to be submitted to Sigrok.
+	 * to be submitted to Sigrok. Cope with memory layouts that
+	 * vary with the samplerate.
 	 */
+	send_ptr = &samples[0];
+	send_count = 0;
+	sample = 0;
 	for (i = 0; i < events_in_cluster; i++) {
-		samples[2 * i + 1] = dram_cluster->samples[i].sample_lo;
-		samples[2 * i + 0] = dram_cluster->samples[i].sample_hi;
+		item16 = sigma_dram_cluster_data(dram_cluster, i);
+		if (devc->cur_samplerate == SR_MHZ(200)) {
+			sample = sigma_deinterlace_200mhz_data(item16, 0);
+			store_sr_sample(samples, send_count++, sample);
+			sample = sigma_deinterlace_200mhz_data(item16, 1);
+			store_sr_sample(samples, send_count++, sample);
+			sample = sigma_deinterlace_200mhz_data(item16, 2);
+			store_sr_sample(samples, send_count++, sample);
+			sample = sigma_deinterlace_200mhz_data(item16, 3);
+			store_sr_sample(samples, send_count++, sample);
+		} else if (devc->cur_samplerate == SR_MHZ(100)) {
+			sample = sigma_deinterlace_100mhz_data(item16, 0);
+			store_sr_sample(samples, send_count++, sample);
+			sample = sigma_deinterlace_100mhz_data(item16, 1);
+			store_sr_sample(samples, send_count++, sample);
+		} else {
+			sample = item16;
+			store_sr_sample(samples, send_count++, sample);
+		}
 	}
 
-	/* Send data up to trigger point (if triggered). */
+	/*
+	 * If a trigger position applies, then provide the datafeed with
+	 * the first part of data up to that position, then send the
+	 * trigger marker.
+	 */
 	int trigger_offset = 0;
 	if (triggered) {
 		/*
@@ -779,10 +908,12 @@ static void sigma_decode_dram_cluster(struct sigma_dram_cluster *dram_cluster,
 					ss->lastsample, &devc->trigger);
 
 		if (trigger_offset > 0) {
+			trig_count = trigger_offset * devc->samples_per_event;
 			packet.type = SR_DF_LOGIC;
-			logic.length = trigger_offset * logic.unitsize;
-			sr_session_send(sdi, &packet);
-			events_in_cluster -= trigger_offset;
+			logic.length = trig_count * logic.unitsize;
+			sigma_session_send(sdi, &packet);
+			send_ptr += trig_count * logic.unitsize;
+			send_count -= trig_count;
 		}
 
 		/* Only send trigger if explicitly enabled. */
@@ -792,17 +923,18 @@ static void sigma_decode_dram_cluster(struct sigma_dram_cluster *dram_cluster,
 		}
 	}
 
-	if (events_in_cluster > 0) {
+	/*
+	 * Send the data after the trigger, or all of the received data
+	 * if no trigger position applies.
+	 */
+	if (send_count) {
 		packet.type = SR_DF_LOGIC;
-		logic.length = events_in_cluster * logic.unitsize;
-		logic.data = samples + (trigger_offset * logic.unitsize);
-		sr_session_send(sdi, &packet);
+		logic.length = send_count * logic.unitsize;
+		logic.data = send_ptr;
+		sigma_session_send(sdi, &packet);
 	}
 
-	ss->lastsample =
-		samples[2 * (events_in_cluster - 1) + 0] |
-		(samples[2 * (events_in_cluster - 1) + 1] << 8);
-
+	ss->lastsample = sample;
 }
 
 /*
@@ -820,12 +952,18 @@ static int decode_chunk_ts(struct sigma_dram_line *dram_line,
 			   struct sr_dev_inst *sdi)
 {
 	struct sigma_dram_cluster *dram_cluster;
-	struct dev_context *devc = sdi->priv;
-	unsigned int clusters_in_line =
-		(events_in_line + (EVENTS_PER_CLUSTER - 1)) / EVENTS_PER_CLUSTER;
+	struct dev_context *devc;
+	unsigned int clusters_in_line;
 	unsigned int events_in_cluster;
 	unsigned int i;
-	uint32_t trigger_cluster = ~0, triggered = 0;
+	uint32_t trigger_cluster, triggered;
+
+	devc = sdi->priv;
+	clusters_in_line = events_in_line;
+	clusters_in_line += EVENTS_PER_CLUSTER - 1;
+	clusters_in_line /= EVENTS_PER_CLUSTER;
+	trigger_cluster = ~0;
+	triggered = 0;
 
 	/* Check if trigger is in this chunk. */
 	if (trigger_event < (64 * 7)) {
@@ -860,17 +998,23 @@ static int decode_chunk_ts(struct sigma_dram_line *dram_line,
 
 static int download_capture(struct sr_dev_inst *sdi)
 {
-	struct dev_context *devc = sdi->priv;
 	const uint32_t chunks_per_read = 32;
+
+	struct dev_context *devc;
 	struct sigma_dram_line *dram_line;
 	int bufsz;
 	uint32_t stoppos, triggerpos;
 	uint8_t modestatus;
-
 	uint32_t i;
 	uint32_t dl_lines_total, dl_lines_curr, dl_lines_done;
-	uint32_t dl_events_in_line = 64 * 7;
-	uint32_t trg_line = ~0, trg_event = ~0;
+	uint32_t dl_first_line, dl_line;
+	uint32_t dl_events_in_line;
+	uint32_t trg_line, trg_event;
+
+	devc = sdi->priv;
+	dl_events_in_line = 64 * 7;
+	trg_line = ~0;
+	trg_event = ~0;
 
 	dram_line = g_try_malloc0(chunks_per_read * sizeof(*dram_line));
 	if (!dram_line)
@@ -878,36 +1022,58 @@ static int download_capture(struct sr_dev_inst *sdi)
 
 	sr_info("Downloading sample data.");
 
-	/* Stop acquisition. */
-	sigma_set_register(WRITE_MODE, 0x11, devc);
+	/*
+	 * Ask the hardware to stop data acquisition. Reception of the
+	 * FORCESTOP request makes the hardware "disable RLE" (store
+	 * clusters to DRAM regardless of whether pin state changes) and
+	 * raise the POSTTRIGGERED flag.
+	 */
+	sigma_set_register(WRITE_MODE, WMR_FORCESTOP | WMR_SDRAMWRITEEN, devc);
+	do {
+		modestatus = sigma_get_register(READ_MODE, devc);
+	} while (!(modestatus & RMR_POSTTRIGGERED));
 
 	/* Set SDRAM Read Enable. */
-	sigma_set_register(WRITE_MODE, 0x02, devc);
+	sigma_set_register(WRITE_MODE, WMR_SDRAMREADEN, devc);
 
 	/* Get the current position. */
 	sigma_read_pos(&stoppos, &triggerpos, devc);
 
 	/* Check if trigger has fired. */
 	modestatus = sigma_get_register(READ_MODE, devc);
-	if (modestatus & 0x20) {
+	if (modestatus & RMR_TRIGGERED) {
 		trg_line = triggerpos >> 9;
 		trg_event = triggerpos & 0x1ff;
 	}
 
+	devc->sent_samples = 0;
+
 	/*
-	 * Determine how many 1024b "DRAM lines" do we need to read from the
-	 * Sigma so we have a complete set of samples. Note that the last
-	 * line can be only partial, containing less than 64 clusters.
+	 * Determine how many "DRAM lines" of 1024 bytes each we need to
+	 * retrieve from the Sigma hardware, so that we have a complete
+	 * set of samples. Note that the last line need not contain 64
+	 * clusters, it might be partially filled only.
+	 *
+	 * When RMR_ROUND is set, the circular buffer in DRAM has wrapped
+	 * around. Since the status of the very next line is uncertain in
+	 * that case, we skip it and start reading from the next line. The
+	 * circular buffer has 32K lines (0x8000).
 	 */
 	dl_lines_total = (stoppos >> 9) + 1;
-
+	if (modestatus & RMR_ROUND) {
+		dl_first_line = dl_lines_total + 1;
+		dl_lines_total = 0x8000 - 2;
+	} else {
+		dl_first_line = 0;
+	}
 	dl_lines_done = 0;
-
 	while (dl_lines_total > dl_lines_done) {
 		/* We can download only up-to 32 DRAM lines in one go! */
-		dl_lines_curr = MIN(chunks_per_read, dl_lines_total);
+		dl_lines_curr = MIN(chunks_per_read, dl_lines_total - dl_lines_done);
 
-		bufsz = sigma_read_dram(dl_lines_done, dl_lines_curr,
+		dl_line = dl_first_line + dl_lines_done;
+		dl_line %= 0x8000;
+		bufsz = sigma_read_dram(dl_line, dl_lines_curr,
 					(uint8_t *)dram_line, devc);
 		/* TODO: Check bufsz. For now, just avoid compiler warnings. */
 		(void)bufsz;
@@ -938,7 +1104,7 @@ static int download_capture(struct sr_dev_inst *sdi)
 
 	std_session_send_df_end(sdi);
 
-	sdi->driver->dev_acquisition_stop(sdi);
+	sr_dev_acquisition_stop(sdi);
 
 	g_free(dram_line);
 
@@ -946,32 +1112,25 @@ static int download_capture(struct sr_dev_inst *sdi)
 }
 
 /*
- * Handle the Sigma when in CAPTURE mode. This function checks:
- * - Sampling time ended
- * - DRAM capacity overflow
- * This function triggers download of the samples from Sigma
- * in case either of the above conditions is true.
+ * Periodically check the Sigma status when in CAPTURE mode. This routine
+ * checks whether the configured sample count or sample time have passed,
+ * and will stop acquisition and download the acquired samples.
  */
 static int sigma_capture_mode(struct sr_dev_inst *sdi)
 {
-	struct dev_context *devc = sdi->priv;
-
+	struct dev_context *devc;
 	uint64_t running_msec;
-	struct timeval tv;
+	uint64_t current_time;
 
-	uint32_t stoppos, triggerpos;
+	devc = sdi->priv;
 
-	/* Check if the selected sampling duration passed. */
-	gettimeofday(&tv, 0);
-	running_msec = (tv.tv_sec - devc->start_tv.tv_sec) * 1000 +
-		       (tv.tv_usec - devc->start_tv.tv_usec) / 1000;
+	/*
+	 * Check if the selected sampling duration passed. Sample count
+	 * limits are covered by this enforced timeout as well.
+	 */
+	current_time = g_get_monotonic_time();
+	running_msec = (current_time - devc->start_time) / 1000;
 	if (running_msec >= devc->limit_msec)
-		return download_capture(sdi);
-
-	/* Get the position in DRAM to which the FPGA is writing now. */
-	sigma_read_pos(&stoppos, &triggerpos, devc);
-	/* Test if DRAM is full and if so, download the data. */
-	if ((stoppos >> 9) == 32767)
 		return download_capture(sdi);
 
 	return TRUE;

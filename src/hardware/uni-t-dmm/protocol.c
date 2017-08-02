@@ -102,8 +102,7 @@ static int hid_chip_init(struct sr_dev_inst *sdi, uint16_t baudrate)
 	struct sr_usb_dev_inst *usb;
 
 	usb = sdi->conn;
-	
-	/* Detach kernel drivers which grabbed this device (if any). */
+
 	if (libusb_kernel_driver_active(usb->devhdl, 0) == 1) {
 		ret = libusb_detach_kernel_driver(usb->devhdl, 0);
 		if (ret < 0) {
@@ -111,18 +110,13 @@ static int hid_chip_init(struct sr_dev_inst *sdi, uint16_t baudrate)
 			       libusb_error_name(ret));
 			return SR_ERR;
 		}
-		sr_dbg("Successfully detached kernel driver.");
-	} else {
-		sr_dbg("No need to detach a kernel driver.");
 	}
 
-	/* Claim interface 0. */
 	if ((ret = libusb_claim_interface(usb->devhdl, 0)) < 0) {
 		sr_err("Failed to claim interface 0: %s.",
 		       libusb_error_name(ret));
 		return SR_ERR;
 	}
-	sr_dbg("Successfully claimed interface 0.");
 
 	/* Set data for the HID feature report (e.g. baudrate). */
 	buf[0] = baudrate & 0xff;        /* Baudrate, LSB */
@@ -157,8 +151,6 @@ static int hid_chip_init(struct sr_dev_inst *sdi, uint16_t baudrate)
 		sr_err("Short packet: sent %d/5 bytes.", ret);
 		return SR_ERR;
 	}
-
-	sr_dbg("Successfully sent initial HID feature report.");
 
 	return SR_OK;
 }
@@ -246,6 +238,8 @@ static int get_and_handle_data(struct sr_dev_inst *sdi)
 	for (i = 0; i < num_databytes_in_chunk; i++, devc->buflen++) {
 		pbuf[devc->buflen] = buf[1 + i];
 		if ((dmm->packet_parse == sr_es519xx_19200_14b_parse) ||
+		    (dmm->packet_parse == sr_es519xx_19200_11b_parse) ||
+		    (dmm->packet_parse == sr_es519xx_2400_11b_parse) ||
 		    (dmm->packet_parse == sr_ut71x_parse)) {
 			/* Mask off the parity bit. */
 			pbuf[devc->buflen] &= ~(1 << 7);
@@ -288,7 +282,7 @@ SR_PRIV int uni_t_dmm_receive_data(int fd, int revents, void *cb_data)
 
 	/* Abort acquisition if we acquired enough samples. */
 	if (sr_sw_limits_check(&devc->limits))
-		sdi->driver->dev_acquisition_stop(sdi);
+		sr_dev_acquisition_stop(sdi);
 
 	return TRUE;
 }

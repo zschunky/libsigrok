@@ -26,6 +26,8 @@
 
 #define LOG_PREFIX "input/csv"
 
+#define DATAFEED_MAX_SAMPLES	(128 * 1024)
+
 /*
  * The CSV input module has the following options:
  *
@@ -65,6 +67,39 @@
  *
  * startline:     Line number to start processing sample data. Must be greater
  *                than 0. The default line number to start processing is 1.
+ */
+
+/*
+ * TODO
+ *
+ * - Determine how the text line handling can get improved, regarding
+ *   all of robustness and flexibility and correctness.
+ *   - The current implementation splits on "any run of CR and LF". Which
+ *     translates to: Line numbers are wrong in the presence of empty
+ *     lines in the input stream. See below for an (expensive) fix.
+ *   - Dropping support for CR style end-of-line markers could improve
+ *     the situation a lot. Code could search for and split on LF, and
+ *     trim optional trailing CR. This would result in proper support
+ *     for CRLF (Windows) as well as LF (Unix), and allow for correct
+ *     line number counts.
+ *   - When support for CR-only line termination cannot get dropped,
+ *     then the current implementation is inappropriate. Currently the
+ *     input stream is scanned for the first occurance of either of the
+ *     supported termination styles (which is good). For the remaining
+ *     session a consistent encoding of the text lines is assumed (which
+ *     is acceptable).
+ *   - When line numbers need to be correct and reliable, _and_ the full
+ *     set of previously supported line termination sequences are required,
+ *     and potentially more are to get added for improved compatibility
+ *     with more platforms or generators, then the current approach of
+ *     splitting on runs of termination characters needs to get replaced,
+ *     by the more expensive approach to scan for and count the initially
+ *     determined termination sequence.
+ *
+ * - Add support for analog input data? (optional)
+ *   - Needs a syntax first for user specs which channels (columns) are
+ *     logic and which are analog. May need heuristics(?) to guess from
+ *     input data in the absence of user provided specs.
  */
 
 /* Single column formats. */
@@ -123,11 +158,12 @@ struct context {
 	/* Format sample data is stored in single column mode. */
 	int format;
 
-	/* Size of the sample buffer. */
-	size_t sample_buffer_size;
+	size_t sample_unit_size;	/**!< Byte count for a single sample. */
+	uint8_t *sample_buffer;		/**!< Buffer for a single sample. */
 
-	/* Buffer to store sample data. */
-	uint8_t *sample_buffer;
+	uint8_t *datafeed_buffer;	/**!< Queue for datafeed submission. */
+	size_t datafeed_buf_size;
+	size_t datafeed_buf_fill;
 
 	/* Current line number. */
 	size_t line_number;
@@ -157,7 +193,7 @@ static int parse_binstr(const char *str, struct context *inc)
 	}
 
 	/* Clear buffer in order to set bits only. */
-	memset(inc->sample_buffer, 0, (inc->num_channels + 7) >> 3);
+	memset(inc->sample_buffer, 0, inc->sample_unit_size);
 
 	i = inc->first_channel;
 
@@ -189,7 +225,7 @@ static int parse_hexstr(const char *str, struct context *inc)
 	}
 
 	/* Clear buffer in order to set bits only. */
-	memset(inc->sample_buffer, 0, (inc->num_channels + 7) >> 3);
+	memset(inc->sample_buffer, 0, inc->sample_unit_size);
 
 	/* Calculate the position of the first hexadecimal digit. */
 	i = inc->first_channel / 4;
@@ -233,7 +269,7 @@ static int parse_octstr(const char *str, struct context *inc)
 	}
 
 	/* Clear buffer in order to set bits only. */
-	memset(inc->sample_buffer, 0, (inc->num_channels + 7) >> 3);
+	memset(inc->sample_buffer, 0, inc->sample_unit_size);
 
 	/* Calculate the position of the first octal digit. */
 	i = inc->first_channel / 3;
@@ -313,20 +349,22 @@ static char **parse_line(char *buf, struct context *inc, int max_columns)
 static int parse_multi_columns(char **columns, struct context *inc)
 {
 	gsize i;
+	char *column;
 
 	/* Clear buffer in order to set bits only. */
-	memset(inc->sample_buffer, 0, (inc->num_channels + 7) >> 3);
+	memset(inc->sample_buffer, 0, inc->sample_unit_size);
 
 	for (i = 0; i < inc->num_channels; i++) {
-		if (columns[i][0] == '1') {
+		column = columns[i];
+		if (column[0] == '1') {
 			inc->sample_buffer[i / 8] |= (1 << (i % 8));
-		} else if (!strlen(columns[i])) {
+		} else if (!strlen(column)) {
 			sr_err("Column %zu in line %zu is empty.",
 				inc->first_channel + i, inc->line_number);
 			return SR_ERR;
-		} else if (columns[i][0] != '0') {
+		} else if (column[0] != '0') {
 			sr_err("Invalid value '%s' in column %zu in line %zu.",
-				columns[i], inc->first_channel + i,
+				column, inc->first_channel + i,
 				inc->line_number);
 			return SR_ERR;
 		}
@@ -356,25 +394,47 @@ static int parse_single_column(const char *column, struct context *inc)
 	return res;
 }
 
-static int send_samples(const struct sr_dev_inst *sdi, uint8_t *buffer,
-		gsize buffer_size, gsize count)
+static int flush_samples(const struct sr_input *in)
 {
+	struct context *inc;
 	struct sr_datafeed_packet packet;
 	struct sr_datafeed_logic logic;
-	int res;
-	gsize i;
+	int rc;
 
+	inc = in->priv;
+	if (!inc->datafeed_buf_fill)
+		return SR_OK;
+
+	memset(&packet, 0, sizeof(packet));
+	memset(&logic, 0, sizeof(logic));
 	packet.type = SR_DF_LOGIC;
 	packet.payload = &logic;
-	logic.unitsize = buffer_size;
-	logic.length = buffer_size;
-	logic.data = buffer;
+	logic.unitsize = inc->sample_unit_size;
+	logic.length = inc->datafeed_buf_fill;
+	logic.data = inc->datafeed_buffer;
 
-	for (i = 0; i < count; i++) {
-		if ((res = sr_session_send(sdi, &packet)) != SR_OK)
-			return res;
+	rc = sr_session_send(in->sdi, &packet);
+	if (rc != SR_OK)
+		return rc;
+
+	inc->datafeed_buf_fill = 0;
+	return SR_OK;
+}
+
+static int queue_samples(const struct sr_input *in)
+{
+	struct context *inc;
+	int rc;
+
+	inc = in->priv;
+
+	inc->datafeed_buf_fill += inc->sample_unit_size;
+	if (inc->datafeed_buf_fill == inc->datafeed_buf_size) {
+		rc = flush_samples(in);
+		if (rc != SR_OK)
+			return rc;
 	}
-
+	inc->sample_buffer = &inc->datafeed_buffer[inc->datafeed_buf_fill];
 	return SR_OK;
 }
 
@@ -444,6 +504,8 @@ static int init(struct sr_input *in, GHashTable *options)
 	return SR_OK;
 }
 
+static const char *delim_set = "\r\n";
+
 static const char *get_line_termination(GString *buf)
 {
 	const char *term;
@@ -466,26 +528,27 @@ static int initial_parse(const struct sr_input *in, GString *buf)
 	unsigned int num_columns, i;
 	size_t line_number, l;
 	int ret;
-	char **lines, **columns;
+	char **lines, *line, **columns, *column;
 
 	ret = SR_OK;
 	inc = in->priv;
 	columns = NULL;
 
 	line_number = 0;
-	lines = g_strsplit_set(buf->str, "\r\n", 0);
+	lines = g_strsplit_set(buf->str, delim_set, 0);
 	for (l = 0; lines[l]; l++) {
 		line_number++;
+		line = lines[l];
 		if (inc->start_line > line_number) {
 			sr_spew("Line %zu skipped.", line_number);
 			continue;
 		}
-		if (lines[l][0] == '\0') {
+		if (line[0] == '\0') {
 			sr_spew("Blank line %zu skipped.", line_number);
 			continue;
 		}
-		strip_comment(lines[l], inc->comment);
-		if (lines[l][0] == '\0') {
+		strip_comment(line, inc->comment);
+		if (line[0] == '\0') {
 			sr_spew("Comment-only line %zu skipped.", line_number);
 			continue;
 		}
@@ -503,7 +566,8 @@ static int initial_parse(const struct sr_input *in, GString *buf)
 	 * In order to determine the number of columns parse the current line
 	 * without limiting the number of columns.
 	 */
-	if (!(columns = parse_line(lines[l], inc, -1))) {
+	columns = parse_line(line, inc, -1);
+	if (!columns) {
 		sr_err("Error while parsing line %zu.", line_number);
 		ret = SR_ERR;
 		goto out;
@@ -543,8 +607,9 @@ static int initial_parse(const struct sr_input *in, GString *buf)
 
 	channel_name = g_string_sized_new(64);
 	for (i = 0; i < inc->num_channels; i++) {
-		if (inc->header && inc->multi_column_mode && columns[i][0] != '\0')
-			g_string_assign(channel_name, columns[i]);
+		column = columns[i];
+		if (inc->header && inc->multi_column_mode && column[0] != '\0')
+			g_string_assign(channel_name, column);
 		else
 			g_string_printf(channel_name, "%u", i);
 		sr_channel_new(in->sdi, i, SR_CHANNEL_LOGIC, TRUE, channel_name->str);
@@ -552,11 +617,18 @@ static int initial_parse(const struct sr_input *in, GString *buf)
 	g_string_free(channel_name, TRUE);
 
 	/*
-	 * Calculate the minimum buffer size to store the sample data of the
-	 * channels.
+	 * Calculate the minimum buffer size to store the set of samples
+	 * of all channels (unit size). Determine a larger buffer size
+	 * for datafeed submission that is a multiple of the unit size.
+	 * Allocate the larger buffer, and have the "sample buffer" point
+	 * to a location within that large buffer.
 	 */
-	inc->sample_buffer_size = (inc->num_channels + 7) >> 3;
-	inc->sample_buffer = g_malloc(inc->sample_buffer_size);
+	inc->sample_unit_size = (inc->num_channels + 7) / 8;
+	inc->datafeed_buf_size = DATAFEED_MAX_SAMPLES;
+	inc->datafeed_buf_size *= inc->sample_unit_size;
+	inc->datafeed_buffer = g_malloc(inc->datafeed_buf_size);
+	inc->datafeed_buf_fill = 0;
+	inc->sample_buffer = &inc->datafeed_buffer[inc->datafeed_buf_fill];
 
 out:
 	if (columns)
@@ -564,6 +636,27 @@ out:
 	g_strfreev(lines);
 
 	return ret;
+}
+
+/*
+ * Gets called from initial_receive(), which runs until the end-of-line
+ * encoding of the input stream could get determined. Assumes that this
+ * routine receives enough buffered initial input data to either see the
+ * BOM when there is one, or that no BOM will follow when a text line
+ * termination sequence was seen. Silently drops the UTF-8 BOM sequence
+ * from the input buffer if one was seen. Does not care to protect
+ * against multiple execution or dropping the BOM multiple times --
+ * there should be at most one in the input stream.
+ */
+static void initial_bom_check(const struct sr_input *in)
+{
+	static const char *utf8_bom = "\xef\xbb\xbf";
+
+	if (in->buf->len < strlen(utf8_bom))
+		return;
+	if (strncmp(in->buf->str, utf8_bom, strlen(utf8_bom)) != 0)
+		return;
+	g_string_erase(in->buf, 0, strlen(utf8_bom));
 }
 
 static int initial_receive(const struct sr_input *in)
@@ -574,13 +667,17 @@ static int initial_receive(const struct sr_input *in)
 	char *p;
 	const char *termination;
 
+	initial_bom_check(in);
+
 	inc = in->priv;
 
-	if (!(termination = get_line_termination(in->buf)))
+	termination = get_line_termination(in->buf);
+	if (!termination)
 		/* Don't have a full line yet. */
 		return SR_ERR_NA;
 
-	if (!(p = g_strrstr_len(in->buf->str, in->buf->len, termination)))
+	p = g_strrstr_len(in->buf->str, in->buf->len, termination);
+	if (!p)
 		/* Don't have a full line yet. */
 		return SR_ERR_NA;
 	len = p - in->buf->str - 1;
@@ -599,7 +696,7 @@ static int initial_receive(const struct sr_input *in)
 	return ret;
 }
 
-static int process_buffer(struct sr_input *in)
+static int process_buffer(struct sr_input *in, gboolean is_eof)
 {
 	struct sr_datafeed_packet packet;
 	struct sr_datafeed_meta meta;
@@ -608,7 +705,7 @@ static int process_buffer(struct sr_input *in)
 	gsize num_columns;
 	uint64_t samplerate;
 	int max_columns, ret, l;
-	char *p, **lines, **columns;
+	char *p, **lines, *line, **columns;
 
 	inc = in->priv;
 	if (!inc->started) {
@@ -628,31 +725,51 @@ static int process_buffer(struct sr_input *in)
 		inc->started = TRUE;
 	}
 
-	if (!(p = g_strrstr_len(in->buf->str, in->buf->len, inc->termination)))
-		/* Don't have a full line. */
-		return SR_ERR;
-
-	*p = '\0';
-	g_strstrip(in->buf->str);
-
 	/* Limit the number of columns to parse. */
 	if (inc->multi_column_mode)
 		max_columns = inc->num_channels;
 	else
 		max_columns = 1;
 
+	/*
+	 * Consider empty input non-fatal. Keep accumulating input until
+	 * at least one full text line has become available. Grab the
+	 * maximum amount of accumulated data that consists of full text
+	 * lines, and process what has been received so far, leaving not
+	 * yet complete lines for the next invocation.
+	 *
+	 * Enforce that all previously buffered data gets processed in
+	 * the "EOF" condition. Do not insist in the presence of the
+	 * termination sequence for the last line (may often be missing
+	 * on Windows). A present termination sequence will just result
+	 * in the "execution of an empty line", and does not harm.
+	 */
+	if (!in->buf->len)
+		return SR_OK;
+	if (is_eof) {
+		p = in->buf->str + in->buf->len;
+	} else {
+		p = g_strrstr_len(in->buf->str, in->buf->len, inc->termination);
+		if (!p)
+			return SR_ERR;
+		*p = '\0';
+		p += strlen(inc->termination);
+	}
+	g_strstrip(in->buf->str);
+
 	ret = SR_OK;
-	lines = g_strsplit_set(in->buf->str, "\r\n", 0);
+	lines = g_strsplit_set(in->buf->str, delim_set, 0);
 	for (l = 0; lines[l]; l++) {
 		inc->line_number++;
-		if (lines[l][0] == '\0') {
+		line = lines[l];
+		if (line[0] == '\0') {
 			sr_spew("Blank line %zu skipped.", inc->line_number);
 			continue;
 		}
 
 		/* Remove trailing comment. */
-		strip_comment(lines[l], inc->comment);
-		if (lines[l][0] == '\0') {
+		strip_comment(line, inc->comment);
+		if (line[0] == '\0') {
 			sr_spew("Comment-only line %zu skipped.", inc->line_number);
 			continue;
 		}
@@ -664,8 +781,10 @@ static int process_buffer(struct sr_input *in)
 			continue;
 		}
 
-		if (!(columns = parse_line(lines[l], inc, max_columns))) {
+		columns = parse_line(line, inc, max_columns);
+		if (!columns) {
 			sr_err("Error while parsing line %zu.", inc->line_number);
+			g_strfreev(lines);
 			return SR_ERR;
 		}
 		num_columns = g_strv_length(columns);
@@ -673,6 +792,7 @@ static int process_buffer(struct sr_input *in)
 			sr_err("Column %u in line %zu is out of bounds.",
 				inc->first_column, inc->line_number);
 			g_strfreev(columns);
+			g_strfreev(lines);
 			return SR_ERR;
 		}
 		/*
@@ -683,6 +803,7 @@ static int process_buffer(struct sr_input *in)
 			sr_err("Not enough columns for desired number of channels in line %zu.",
 				inc->line_number);
 			g_strfreev(columns);
+			g_strfreev(lines);
 			return SR_ERR;
 		}
 
@@ -692,20 +813,23 @@ static int process_buffer(struct sr_input *in)
 			ret = parse_single_column(columns[0], inc);
 		if (ret != SR_OK) {
 			g_strfreev(columns);
+			g_strfreev(lines);
 			return SR_ERR;
 		}
 
 		/* Send sample data to the session bus. */
-		ret = send_samples(in->sdi, inc->sample_buffer,
-			inc->sample_buffer_size, 1);
+		ret = queue_samples(in);
 		if (ret != SR_OK) {
 			sr_err("Sending samples failed.");
+			g_strfreev(columns);
+			g_strfreev(lines);
 			return SR_ERR;
 		}
+
 		g_strfreev(columns);
 	}
 	g_strfreev(lines);
-	g_string_erase(in->buf, 0, p - in->buf->str + 1);
+	g_string_erase(in->buf, 0, p - in->buf->str);
 
 	return ret;
 }
@@ -719,7 +843,8 @@ static int receive(struct sr_input *in, GString *buf)
 
 	inc = in->priv;
 	if (!inc->termination) {
-		if ((ret = initial_receive(in)) == SR_ERR_NA)
+		ret = initial_receive(in);
+		if (ret == SR_ERR_NA)
 			/* Not enough data yet. */
 			return SR_OK;
 		else if (ret != SR_OK)
@@ -730,7 +855,7 @@ static int receive(struct sr_input *in, GString *buf)
 		return SR_OK;
 	}
 
-	ret = process_buffer(in);
+	ret = process_buffer(in, FALSE);
 
 	return ret;
 }
@@ -741,9 +866,15 @@ static int end(struct sr_input *in)
 	int ret;
 
 	if (in->sdi_ready)
-		ret = process_buffer(in);
+		ret = process_buffer(in, TRUE);
 	else
 		ret = SR_OK;
+	if (ret != SR_OK)
+		return ret;
+
+	ret = flush_samples(in);
+	if (ret != SR_OK)
+		return ret;
 
 	inc = in->priv;
 	if (inc->started)
@@ -765,7 +896,7 @@ static void cleanup(struct sr_input *in)
 		g_string_free(inc->comment, TRUE);
 
 	g_free(inc->termination);
-	g_free(inc->sample_buffer);
+	g_free(inc->datafeed_buffer);
 }
 
 static int reset(struct sr_input *in)

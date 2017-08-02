@@ -84,19 +84,11 @@ static const char *coupling_options[] = {
 };
 
 static const char *scope_trigger_slopes[] = {
-	"POS",
-	"NEG",
-	NULL,
+	"POS", "NEG", NULL,
 };
 
 static const char *trigger_sources[] = {
-	"C1",
-	"C2",
-	"C3",
-	"C4",
-	"LINE",
-	"EXT",
-	NULL,
+	"C1", "C2", "C3", "C4", "LINE", "EXT", NULL,
 };
 
 static const struct sr_rational timebases[] = {
@@ -170,10 +162,7 @@ static const struct sr_rational vdivs[] = {
 };
 
 static const char *scope_analog_channel_names[] = {
-	"CH1",
-	"CH2",
-	"CH3",
-	"CH4",
+	"CH1", "CH2", "CH3", "CH4",
 };
 
 static const struct scope_config scope_models[] = {
@@ -292,7 +281,7 @@ static int analog_channel_state_get(struct sr_scpi_dev_inst *scpi,
 		if (sr_scpi_get_string(scpi, command, &tmp_str) != SR_OK)
 			return SR_ERR;
 
-                if (array_float_get(tmp_str, vdivs, ARRAY_SIZE(vdivs), &j) != SR_OK) {
+                if (array_float_get(tmp_str, ARRAY_AND_SIZE(vdivs), &j) != SR_OK) {
 			g_free(tmp_str);
 			sr_err("Could not determine array index for vertical div scale.");
 			return SR_ERR;
@@ -366,7 +355,7 @@ SR_PRIV int lecroy_xstream_state_get(struct sr_dev_inst *sdi)
 	if (sr_scpi_get_string(sdi->conn, "TIME_DIV?", &tmp_str) != SR_OK)
 		return SR_ERR;
 
-	if (array_float_get(tmp_str, timebases, ARRAY_SIZE(timebases), &i) != SR_OK) {
+	if (array_float_get(tmp_str, ARRAY_AND_SIZE(timebases), &i) != SR_OK) {
 		g_free(tmp_str);
 		sr_err("Could not determine array index for timbase scale.");
 		return SR_ERR;
@@ -662,7 +651,7 @@ SR_PRIV int lecroy_xstream_receive_data(int fd, int revents, void *cb_data)
 	 * the first enabled channel.
 	 */
 	if (++devc->num_frames == devc->frame_limit) {
-		sdi->driver->dev_acquisition_stop(sdi);
+		sr_dev_acquisition_stop(sdi);
 	} else {
 		devc->current_channel = devc->enabled_channels;
 		lecroy_xstream_request_data(sdi);

@@ -130,7 +130,6 @@ static const struct scpi_command chroma_61604_cmd[] = {
 };
 
 /* Chroma 62000 series DC source */
-
 static const uint32_t chroma_62000_devopts[] = {
 	SR_CONF_CONTINUOUS,
 };
@@ -205,9 +204,9 @@ static int chroma_62000p_probe_channels(struct sr_dev_inst *sdi,
 	channel = g_malloc0(sizeof(struct channel_spec));
 	channel->name = "1";
 	channel->voltage[0] = channel->current[0] = channel->power[0] = 0.0;
-	channel->voltage[1] = (float)volts;
-	channel->current[1] = (float)amps;
-	channel->power[1]   = (float)watts;
+	channel->voltage[1] = volts;
+	channel->current[1] = amps;
+	channel->power[1]   = watts;
 	channel->voltage[2] = channel->current[2] = 0.01;
 	channel->voltage[3] = channel->voltage[4] = 3;
 	channel->current[3] = channel->current[4] = 4;
@@ -307,7 +306,6 @@ static const struct scpi_command rigol_dp800_cmd[] = {
 };
 
 /* HP 663xx series */
-
 static const uint32_t hp_6630a_devopts[] = {
 	SR_CONF_CONTINUOUS,
 	SR_CONF_ENABLED | SR_CONF_SET,
@@ -395,9 +393,9 @@ enum philips_pm2800_modules {
 
 static const struct philips_pm2800_module_spec {
 	/* Min, max, programming resolution. */
-	float voltage[5];
-	float current[5];
-	float power[5];
+	double voltage[5];
+	double current[5];
+	double power[5];
 } philips_pm2800_module_specs[] = {
 	/* Autoranging modules. */
 	[PM2800_MOD_30V_10A] = { { 0, 30, 0.0075, 2, 4 }, { 0, 10, 0.0025, 2, 4 }, { 0, 60 } },
@@ -483,7 +481,7 @@ static int philips_pm2800_probe_channels(struct sr_dev_inst *sdi,
 				spec->current[0], spec->current[1],
 				spec->power[0], spec->power[1]);
 		(*channels)[i].name = (char *)philips_pm2800_names[i];
-		memcpy(&((*channels)[i].voltage), spec, sizeof(float) * 15);
+		memcpy(&((*channels)[i].voltage), spec, sizeof(double) * 15);
 		(*channel_groups)[i].name = (char *)philips_pm2800_names[i];
 		(*channel_groups)[i].channel_index_mask = 1 << i;
 		(*channel_groups)[i].features = PPS_OTP | PPS_OVP | PPS_OCP;
@@ -572,6 +570,7 @@ SR_PRIV const struct scpi_pps pps_profiles[] = {
 		agilent_n5700a_cmd,
 		.probe_channels = NULL,
 	},
+
 	/* Agilent N5767A */
 	{ "Agilent", "N5767A", 0,
 		ARRAY_AND_SIZE(agilent_n5700a_devopts),
@@ -581,6 +580,7 @@ SR_PRIV const struct scpi_pps pps_profiles[] = {
 		agilent_n5700a_cmd,
 		.probe_channels = NULL,
 	},
+
 	/* Chroma 61604 */
 	{ "Chroma", "61604", 0,
 		ARRAY_AND_SIZE(chroma_61604_devopts),
@@ -590,6 +590,7 @@ SR_PRIV const struct scpi_pps pps_profiles[] = {
 		chroma_61604_cmd,
 		.probe_channels = NULL,
 	},
+
 	/* Chroma 62000 series */
 	{ "Chroma", "620[0-9]{2}P-[0-9]{2,3}-[0-9]{1,3}", 0,
 		ARRAY_AND_SIZE(chroma_62000_devopts),
@@ -599,6 +600,7 @@ SR_PRIV const struct scpi_pps pps_profiles[] = {
 		chroma_62000_cmd,
 		.probe_channels = chroma_62000p_probe_channels,
 	},
+
 	/* HP 6633A */
 	{ "HP", "6633A", 0,
 		ARRAY_AND_SIZE(hp_6630a_devopts),

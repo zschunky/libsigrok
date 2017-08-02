@@ -47,8 +47,8 @@ extern SR_PRIV struct sr_dev_driver session_driver;
 static int session_driver_initialized = 0;
 
 #if !HAVE_ZIP_DISCARD
-/* Replacement for zip_discard() if it isn't available.
- */
+/* Replacement for zip_discard() if it isn't available. */
+/** @private */
 SR_PRIV void sr_zip_discard(struct zip *archive)
 {
 	if (zip_unchange_all(archive) < 0 || zip_close(archive) < 0)
@@ -56,10 +56,15 @@ SR_PRIV void sr_zip_discard(struct zip *archive)
 }
 #endif
 
-/** Read metadata entries from a session archive.
+/**
+ * Read metadata entries from a session archive.
+ *
  * @param[in] archive An open ZIP archive.
  * @param[in] entry Stat buffer filled in for the metadata archive member.
+ *
  * @return A new key/value store containing the session metadata.
+ *
+ * @private
  */
 SR_PRIV GKeyFile *sr_sessionfile_read_metadata(struct zip *archive,
 			const struct zip_stat *entry)
@@ -162,14 +167,15 @@ SR_PRIV int sr_sessionfile_check(const char *filename)
 
 	return SR_OK;
 }
-
+ 
+/** @private */
 SR_PRIV struct sr_dev_inst *sr_session_prepare_sdi(const char *filename, struct sr_session **session)
 {
 	struct sr_dev_inst *sdi = NULL;
 
 	sdi = g_malloc0(sizeof(struct sr_dev_inst));
 	sdi->driver = &session_driver;
-	sdi->status = SR_ST_ACTIVE;
+	sdi->status = SR_ST_INACTIVE;
 	if (!session_driver_initialized) {
 		/* first device, init the driver */
 		session_driver_initialized = 1;

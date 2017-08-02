@@ -21,14 +21,15 @@
 #include "protocol.h"
 #include "beaglelogic.h"
 
-/* Scan options */
 static const uint32_t scanopts[] = {
 	SR_CONF_NUM_LOGIC_CHANNELS,
 };
 
-/* Hardware capabilities */
-static const uint32_t devopts[] = {
+static const uint32_t drvopts[] = {
 	SR_CONF_LOGIC_ANALYZER,
+};
+
+static const uint32_t devopts[] = {
 	SR_CONF_CONTINUOUS,
 	SR_CONF_LIMIT_SAMPLES | SR_CONF_GET | SR_CONF_SET,
 	SR_CONF_SAMPLERATE | SR_CONF_GET | SR_CONF_SET,
@@ -37,8 +38,7 @@ static const uint32_t devopts[] = {
 	SR_CONF_NUM_LOGIC_CHANNELS | SR_CONF_GET,
 };
 
-/* Trigger matching capabilities */
-static const int32_t soft_trigger_matches[] = {
+static const int32_t trigger_matches[] = {
 	SR_TRIGGER_ZERO,
 	SR_TRIGGER_ONE,
 	SR_TRIGGER_RISING,
@@ -117,10 +117,8 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 	beaglelogic_set_sampleunit(devc);
 	beaglelogic_close(devc);
 
-	/* Signal */
 	sr_info("BeagleLogic device found at "BEAGLELOGIC_DEV_NODE);
 
-	/* Fill the channels */
 	for (i = 0; i < maxch; i++)
 		sr_channel_new(sdi, i, SR_CHANNEL_LOGIC, TRUE,
 				channel_names[i]);
@@ -157,8 +155,6 @@ static int dev_open(struct sr_dev_inst *sdi)
 		return SR_ERR;
 	}
 
-	/* We're good to go now */
-	sdi->status = SR_ST_ACTIVE;
 	return SR_OK;
 }
 
@@ -166,17 +162,15 @@ static int dev_close(struct sr_dev_inst *sdi)
 {
 	struct dev_context *devc = sdi->priv;
 
-	if (sdi->status == SR_ST_ACTIVE) {
-		/* Close the memory mapping and the file */
-		beaglelogic_munmap(devc);
-		beaglelogic_close(devc);
-	}
-	sdi->status = SR_ST_INACTIVE;
+	/* Close the memory mapping and the file */
+	beaglelogic_munmap(devc);
+	beaglelogic_close(devc);
+
 	return SR_OK;
 }
 
-static int config_get(uint32_t key, GVariant **data, const struct sr_dev_inst *sdi,
-		const struct sr_channel_group *cg)
+static int config_get(uint32_t key, GVariant **data,
+	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
 {
 	struct dev_context *devc = sdi->priv;
 
@@ -202,16 +196,13 @@ static int config_get(uint32_t key, GVariant **data, const struct sr_dev_inst *s
 	return SR_OK;
 }
 
-static int config_set(uint32_t key, GVariant *data, const struct sr_dev_inst *sdi,
-		const struct sr_channel_group *cg)
+static int config_set(uint32_t key, GVariant *data,
+	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
 {
 	struct dev_context *devc = sdi->priv;
 	uint64_t tmp_u64;
 
 	(void)cg;
-
-	if (sdi->status != SR_ST_ACTIVE)
-		return SR_ERR_DEV_CLOSED;
 
 	switch (key) {
 	case SR_CONF_SAMPLERATE:
@@ -236,9 +227,7 @@ static int config_set(uint32_t key, GVariant *data, const struct sr_dev_inst *sd
 		return beaglelogic_set_triggerflags(devc);
 	case SR_CONF_CAPTURE_RATIO:
 		devc->capture_ratio = g_variant_get_uint64(data);
-		if (devc->capture_ratio > 100)
-			return SR_ERR;
-		return SR_OK;
+		break;
 	default:
 		return SR_ERR_NA;
 	}
@@ -246,43 +235,24 @@ static int config_set(uint32_t key, GVariant *data, const struct sr_dev_inst *sd
 	return SR_OK;
 }
 
-static int config_list(uint32_t key, GVariant **data, const struct sr_dev_inst *sdi,
-		const struct sr_channel_group *cg)
+static int config_list(uint32_t key, GVariant **data,
+	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
 {
-	int ret;
-	GVariant *gvar;
-	GVariantBuilder gvb;
-
-	(void)sdi;
-	(void)cg;
-
-	ret = SR_OK;
 	switch (key) {
 	case SR_CONF_SCAN_OPTIONS:
-		*data = g_variant_new_fixed_array(G_VARIANT_TYPE_UINT32,
-				scanopts, ARRAY_SIZE(scanopts), sizeof(uint32_t));
-		break;
 	case SR_CONF_DEVICE_OPTIONS:
-		*data = g_variant_new_fixed_array(G_VARIANT_TYPE_UINT32,
-				devopts, ARRAY_SIZE(devopts), sizeof(uint32_t));
-		break;
+		return STD_CONFIG_LIST(key, data, sdi, cg, scanopts, drvopts, devopts);
 	case SR_CONF_SAMPLERATE:
-		g_variant_builder_init(&gvb, G_VARIANT_TYPE("a{sv}"));
-		gvar = g_variant_new_fixed_array(G_VARIANT_TYPE("t"),
-			samplerates, ARRAY_SIZE(samplerates), sizeof(uint64_t));
-		g_variant_builder_add(&gvb, "{sv}", "samplerate-steps", gvar);
-		*data = g_variant_builder_end(&gvb);
+		*data = std_gvar_samplerates_steps(ARRAY_AND_SIZE(samplerates));
 		break;
 	case SR_CONF_TRIGGER_MATCH:
-		*data = g_variant_new_fixed_array(G_VARIANT_TYPE_INT32,
-				soft_trigger_matches, ARRAY_SIZE(soft_trigger_matches),
-				sizeof(int32_t));
+		*data = std_gvar_array_i32(ARRAY_AND_SIZE(trigger_matches));
 		break;
 	default:
 		return SR_ERR_NA;
 	}
 
-	return ret;
+	return SR_OK;
 }
 
 /* get a sane timeout for poll() */
@@ -293,9 +263,6 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 {
 	struct dev_context *devc = sdi->priv;
 	struct sr_trigger *trigger;
-
-	if (sdi->status != SR_ST_ACTIVE)
-		return SR_ERR_DEV_CLOSED;
 
 	/* Clear capture state */
 	devc->bytes_read = 0;
@@ -310,7 +277,7 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 	if ((trigger = sr_session_trigger_get(sdi->session))) {
 		int pre_trigger_samples = 0;
 		if (devc->limit_samples > 0)
-			pre_trigger_samples = devc->capture_ratio * devc->limit_samples/100;
+			pre_trigger_samples = (devc->capture_ratio * devc->limit_samples) / 100;
 		devc->stl = soft_trigger_logic_new(sdi, trigger, pre_trigger_samples);
 		if (!devc->stl)
 			return SR_ERR_MALLOC;
@@ -331,9 +298,6 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 static int dev_acquisition_stop(struct sr_dev_inst *sdi)
 {
 	struct dev_context *devc = sdi->priv;
-
-	if (sdi->status != SR_ST_ACTIVE)
-		return SR_ERR_DEV_CLOSED;
 
 	/* Execute a stop on BeagleLogic */
 	beaglelogic_stop(devc);
@@ -356,6 +320,7 @@ static struct sr_dev_driver beaglelogic_driver_info = {
 	.cleanup = std_cleanup,
 	.scan = scan,
 	.dev_list = std_dev_list,
+	.dev_clear = std_dev_clear,
 	.config_get = config_get,
 	.config_set = config_set,
 	.config_list = config_list,

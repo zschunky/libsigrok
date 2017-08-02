@@ -25,11 +25,10 @@
 #include <libsigrok/libsigrok.h>
 #include "libsigrok-internal.h"
 
-#define LOG_PREFIX "re-load-pro"
+#define LOG_PREFIX "arachnid-labs-re-load-pro"
 
 #define RELOADPRO_BUFSIZE 100
 
-/** Private, per-device-instance driver context. */
 struct dev_context {
 	struct sr_sw_limits limits;
 	uint8_t buf[RELOADPRO_BUFSIZE];

@@ -50,6 +50,7 @@ lib_LTLIBRARIES = libsigrok.la
 # Backend files
 libsigrok_la_SOURCES = \
 	src/backend.c \
+	src/conversion.c \
 	src/device.c \
 	src/session.c \
 	src/session_file.c \
@@ -272,6 +273,12 @@ src_libdrivers_la_SOURCES += \
 	src/hardware/demo/protocol.c \
 	src/hardware/demo/api.c
 endif
+if HW_DREAMSOURCELAB_DSLOGIC
+src_libdrivers_la_SOURCES += \
+	src/hardware/dreamsourcelab-dslogic/protocol.h \
+	src/hardware/dreamsourcelab-dslogic/protocol.c \
+	src/hardware/dreamsourcelab-dslogic/api.c
+endif
 if HW_FLUKE_DMM
 src_libdrivers_la_SOURCES += \
 	src/hardware/fluke-dmm/protocol.h \
@@ -288,9 +295,7 @@ if HW_FX2LAFW
 src_libdrivers_la_SOURCES += \
 	src/hardware/fx2lafw/protocol.h \
 	src/hardware/fx2lafw/protocol.c \
-	src/hardware/fx2lafw/api.c \
-	src/hardware/fx2lafw/dslogic.c \
-	src/hardware/fx2lafw/dslogic.h
+	src/hardware/fx2lafw/api.c
 endif
 if HW_GMC_MH_1X_2X
 src_libdrivers_la_SOURCES += \
@@ -454,6 +459,12 @@ src_libdrivers_la_SOURCES += \
 	src/hardware/saleae-logic16/protocol.c \
 	src/hardware/saleae-logic16/api.c
 endif
+if HW_SALEAE_LOGIC_PRO
+src_libdrivers_la_SOURCES += \
+	src/hardware/saleae-logic-pro/protocol.h \
+	src/hardware/saleae-logic-pro/protocol.c \
+	src/hardware/saleae-logic-pro/api.c
+endif
 if HW_SCPI_PPS
 src_libdrivers_la_SOURCES += \
 	src/hardware/scpi-pps/protocol.h \
@@ -550,6 +561,15 @@ noinst_HEADERS = src/libsigrok-internal.h
 pkgconfigdir = $(libdir)/pkgconfig
 pkgconfig_DATA = libsigrok.pc
 
+mimeappdir = $(datadir)/mime/packages
+mimeapp_DATA = contrib/vnd.sigrok.session.xml
+
+mimeicondir = $(datadir)/icons/hicolor/48x48/mimetypes
+mimeicon_DATA = contrib/libsigrok.png
+
+mimeiconscalabledir = $(datadir)/icons/hicolor/scalable/mimetypes
+mimeiconscalable_DATA = contrib/libsigrok.svg
+
 EXTRA_DIST = \
 	Doxyfile \
 	HACKING \
@@ -574,7 +594,10 @@ EXTRA_DIST = \
 	bindings/swig/classes.i \
 	bindings/swig/doc.py \
 	bindings/swig/templates.i \
-	contrib/sigrok-logo-notext.png \
+	contrib/libsigrok_112x112.png \
+	contrib/libsigrok.png \
+	contrib/libsigrok.svg \
+	contrib/vnd.sigrok.session.xml \
 	contrib/z60_libsigrok.rules
 
 if HAVE_CHECK
@@ -606,6 +629,11 @@ BUILD_EXTRA =
 INSTALL_EXTRA =
 UNINSTALL_EXTRA =
 CLEAN_EXTRA =
+
+libsigrok-uninstall:
+	-rmdir $(DESTDIR)$(includedir)/libsigrok
+
+UNINSTALL_EXTRA += libsigrok-uninstall
 
 if BINDINGS_CXX
 
@@ -648,6 +676,11 @@ cxx-clean:
 	rm -f bindings/cxx/enums.timestamp
 
 CLEAN_EXTRA += cxx-clean
+
+cxx-uninstall:
+	-rmdir $(DESTDIR)$(includedir)/libsigrokcxx
+
+UNINSTALL_EXTRA += cxx-uninstall
 
 endif
 
@@ -831,7 +864,7 @@ endif
 
 all-local: $(BUILD_EXTRA)
 install-exec-local: $(INSTALL_EXTRA)
-uninstall-local: $(UNINSTALL_EXTRA)
+uninstall-hook: $(UNINSTALL_EXTRA)
 clean-local: $(CLEAN_EXTRA)
 
 .PHONY: dist-changelog

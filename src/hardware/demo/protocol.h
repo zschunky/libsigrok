@@ -34,7 +34,6 @@
 /* Size of the analog pattern space per channel. */
 #define ANALOG_BUFSIZE			4096
 
-/* Private, per-device-instance driver context. */
 struct dev_context {
 	uint64_t cur_samplerate;
 	uint64_t limit_samples;
@@ -54,6 +53,10 @@ struct dev_context {
 	GHashTable *ch_ag;
 	gboolean avg; /* True if averaging is enabled */
 	uint64_t avg_samples;
+	size_t enabled_logic_channels;
+	size_t enabled_analog_channels;
+	size_t first_partial_logic_index;
+	uint8_t first_partial_logic_mask;
 };
 
 /* Logic patterns we can generate. */
@@ -75,18 +78,32 @@ enum {
 	 */
 	PATTERN_INC,
 
+	/**
+	 * Single bit "walking" across all logic channels by being
+	 * shifted across data lines, restarting after the last line
+	 * was used. An all-zero (all-one) state is inserted to prevent
+	 * repetitive patterns (e.g. with 8 data lines, every 8th state
+	 * would show the same line state)
+	 */
+	PATTERN_WALKING_ONE,
+	PATTERN_WALKING_ZERO,
+
 	/** All channels have a low logic state. */
 	PATTERN_ALL_LOW,
 
 	/** All channels have a high logic state. */
 	PATTERN_ALL_HIGH,
+
+	/**
+	 * Mimics a cable squid. Derived from the "works with" logo
+	 * to occupy a larger number of channels yet "painting"
+	 * something that can get recognized.
+	 */
+	PATTERN_SQUID,
 };
 
 /* Analog patterns we can generate. */
 enum {
-	/**
-	 * Square wave.
-	 */
 	PATTERN_SQUARE,
 	PATTERN_SINE,
 	PATTERN_TRIANGLE,
@@ -101,6 +118,7 @@ static const char *analog_pattern_str[] = {
 };
 
 struct analog_gen {
+	struct sr_channel *ch;
 	int pattern;
 	float amplitude;
 	float pattern_data[ANALOG_BUFSIZE];

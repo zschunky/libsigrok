@@ -834,6 +834,8 @@ SR_PRIV int sr_variant_type_check(uint32_t key, GVariant *data);
 SR_PRIV void sr_hw_cleanup_all(const struct sr_context *ctx);
 SR_PRIV struct sr_config *sr_config_new(uint32_t key, GVariant *data);
 SR_PRIV void sr_config_free(struct sr_config *src);
+SR_PRIV int sr_dev_acquisition_start(struct sr_dev_inst *sdi);
+SR_PRIV int sr_dev_acquisition_stop(struct sr_dev_inst *sdi);
 
 /*--- session.c -------------------------------------------------------------*/
 
@@ -928,17 +930,59 @@ typedef void (*std_dev_clear_callback)(void *priv);
 
 SR_PRIV int std_init(struct sr_dev_driver *di, struct sr_context *sr_ctx);
 SR_PRIV int std_cleanup(const struct sr_dev_driver *di);
+SR_PRIV int std_dummy_dev_open(struct sr_dev_inst *sdi);
+SR_PRIV int std_dummy_dev_close(struct sr_dev_inst *sdi);
+SR_PRIV int std_dummy_dev_acquisition_start(const struct sr_dev_inst *sdi);
+SR_PRIV int std_dummy_dev_acquisition_stop(struct sr_dev_inst *sdi);
 #ifdef HAVE_LIBSERIALPORT
 SR_PRIV int std_serial_dev_open(struct sr_dev_inst *sdi);
 SR_PRIV int std_serial_dev_acquisition_stop(struct sr_dev_inst *sdi);
 #endif
 SR_PRIV int std_session_send_df_header(const struct sr_dev_inst *sdi);
 SR_PRIV int std_session_send_df_end(const struct sr_dev_inst *sdi);
-SR_PRIV int std_dev_clear(const struct sr_dev_driver *driver,
+SR_PRIV int std_dev_clear_with_callback(const struct sr_dev_driver *driver,
 		std_dev_clear_callback clear_private);
+SR_PRIV int std_dev_clear(const struct sr_dev_driver *driver);
 SR_PRIV GSList *std_dev_list(const struct sr_dev_driver *di);
 SR_PRIV int std_serial_dev_close(struct sr_dev_inst *sdi);
 SR_PRIV GSList *std_scan_complete(struct sr_dev_driver *di, GSList *devices);
+
+SR_PRIV int std_opts_config_list(uint32_t key, GVariant **data,
+	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg,
+	const uint32_t scanopts[], size_t scansize, const uint32_t drvopts[],
+	size_t drvsize, const uint32_t devopts[], size_t devsize);
+
+#define STD_CONFIG_LIST(key, data, sdi, cg, scanopts, drvopts, devopts) \
+	std_opts_config_list(key, data, sdi, cg, ARRAY_AND_SIZE(scanopts), \
+		ARRAY_AND_SIZE(drvopts), ARRAY_AND_SIZE(devopts))
+
+SR_PRIV GVariant *std_gvar_tuple_array(const uint64_t a[][2], unsigned int n);
+SR_PRIV GVariant *std_gvar_tuple_rational(const struct sr_rational *r, unsigned int n);
+SR_PRIV GVariant *std_gvar_samplerates(const uint64_t samplerates[], unsigned int n);
+SR_PRIV GVariant *std_gvar_samplerates_steps(const uint64_t samplerates[], unsigned int n);
+SR_PRIV GVariant *std_gvar_min_max_step(double min, double max, double step);
+SR_PRIV GVariant *std_gvar_min_max_step_array(const double a[3]);
+SR_PRIV GVariant *std_gvar_min_max_step_thresholds(const double dmin, const double dmax, const double dstep);
+
+SR_PRIV GVariant *std_gvar_tuple_u64(uint64_t low, uint64_t high);
+SR_PRIV GVariant *std_gvar_tuple_double(double low, double high);
+
+SR_PRIV GVariant *std_gvar_array_i32(const int32_t *a, unsigned int n);
+SR_PRIV GVariant *std_gvar_array_u32(const uint32_t *a, unsigned int n);
+SR_PRIV GVariant *std_gvar_array_u64(const uint64_t *a, unsigned int n);
+
+SR_PRIV GVariant *std_gvar_thresholds(const double a[][2], unsigned int n);
+
+SR_PRIV int std_str_idx(GVariant *data, const char *a[], unsigned int n);
+SR_PRIV int std_u64_idx(GVariant *data, const uint64_t a[], unsigned int n);
+SR_PRIV int std_u8_idx(GVariant *data, const uint8_t a[], unsigned int n);
+
+SR_PRIV int std_str_idx_s(const char *s, const char *a[], unsigned int n);
+SR_PRIV int std_u8_idx_s(uint8_t b, const uint8_t a[], unsigned int n);
+
+SR_PRIV int std_u64_tuple_idx(GVariant *data, const uint64_t a[][2], unsigned int n);
+SR_PRIV int std_double_tuple_idx(GVariant *data, const double a[][2], unsigned int n);
+SR_PRIV int std_double_tuple_idx_d0(const double d, const double a[][2], unsigned int n);
 
 /*--- resource.c ------------------------------------------------------------*/
 
@@ -1050,6 +1094,8 @@ SR_PRIV int usb_source_add(struct sr_session *session, struct sr_context *ctx,
 		int timeout, sr_receive_data_callback cb, void *cb_data);
 SR_PRIV int usb_source_remove(struct sr_session *session, struct sr_context *ctx);
 SR_PRIV int usb_get_port_path(libusb_device *dev, char *path, int path_len);
+SR_PRIV gboolean usb_match_manuf_prod(libusb_device *dev,
+		const char *manufacturer, const char *product);
 #endif
 
 
@@ -1209,6 +1255,9 @@ SR_PRIV int sr_dtm0660_parse(const uint8_t *buf, float *floatval,
 /*--- hardware/dmm/m2110.c --------------------------------------------------*/
 
 #define BBCGM_M2110_PACKET_SIZE 9
+
+/* Dummy info struct. The parser does not use it. */
+struct m2110_info { int dummy; };
 
 SR_PRIV gboolean sr_m2110_packet_valid(const uint8_t *buf);
 SR_PRIV int sr_m2110_parse(const uint8_t *buf, float *floatval,

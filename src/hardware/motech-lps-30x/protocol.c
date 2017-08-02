@@ -18,14 +18,6 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-/**
- * @file
- *
- * <em>Motech LPS-30x series</em> power supply driver
- *
- * @internal
- */
-
 #include <config.h>
 #include <errno.h>
 #include <string.h>
@@ -193,7 +185,7 @@ SR_PRIV int motech_lps_30x_receive_data(int fd, int revents, void *cb_data)
 	}
 
 	if (sr_sw_limits_check(&devc->limits))
-		sdi->driver->dev_acquisition_stop(sdi);
+		sr_dev_acquisition_stop(sdi);
 
 	/* Only request the next packet if required. */
 	if (!((sdi->status == SR_ST_ACTIVE) && (devc->acq_running)))

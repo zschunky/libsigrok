@@ -18,56 +18,31 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-/**
- * @file
- *
- * <em>Yokogawa DL/DLM series</em> oscilloscope driver
- * @internal
- */
-
 #include <config.h>
 #include "scpi.h"
 #include "protocol.h"
 
-static const char *dlm_coupling_options[] = {
-	"AC",
-	"DC",
-	"DC50",
-	"GND",
+static const char *coupling_options[] = {
+	"AC", "DC", "DC50", "GND",
 	NULL,
 };
 
-static const char *dlm_2ch_trigger_sources[] = {
-	"1",
-	"2",
-	"LINE",
-	"EXT",
+static const char *trigger_sources_2ch[] = {
+	"1", "2", "LINE", "EXT",
 	NULL,
 };
 
 /* TODO: Is BITx handled correctly or is Dx required? */
-static const char *dlm_4ch_trigger_sources[] = {
-	"1",
-	"2",
-	"3",
-	"4",
-	"LINE",
-	"EXT",
-	"BIT1",
-	"BIT2",
-	"BIT3",
-	"BIT4",
-	"BIT5",
-	"BIT6",
-	"BIT7",
-	"BIT8",
+static const char *trigger_sources_4ch[] = {
+	"1", "2", "3", "4",
+	"LINE", "EXT", "BIT1",
+	"BIT2", "BIT3", "BIT4", "BIT5", "BIT6", "BIT7", "BIT8",
 	NULL,
 };
 
 /* Note: Values must correlate to the trigger_slopes values. */
 const char *dlm_trigger_slopes[3] = {
-	"r",
-	"f",
+	"r", "f",
 	NULL,
 };
 
@@ -137,56 +112,18 @@ const uint64_t dlm_vdivs[17][2] = {
 };
 
 static const char *scope_analog_channel_names[] = {
-	"1",
-	"2",
-	"3",
-	"4",
+	"1", "2", "3", "4",
 };
 
 static const char *scope_digital_channel_names_8[] = {
-	"D0",
-	"D1",
-	"D2",
-	"D3",
-	"D4",
-	"D5",
-	"D6",
-	"D7",
+	"D0", "D1", "D2", "D3", "D4", "D5", "D6", "D7",
 };
 
 static const char *scope_digital_channel_names_32[] = {
-	"A0",
-	"A1",
-	"A2",
-	"A3",
-	"A4",
-	"A5",
-	"A6",
-	"A7",
-	"B0",
-	"B1",
-	"B2",
-	"B3",
-	"B4",
-	"B5",
-	"B6",
-	"B7",
-	"C0",
-	"C1",
-	"C2",
-	"C3",
-	"C4",
-	"C5",
-	"C6",
-	"C7",
-	"D0",
-	"D1",
-	"D2",
-	"D3",
-	"D4",
-	"D5",
-	"D6",
-	"D7",
+	"A0", "A1", "A2", "A3", "A4", "A5", "A6", "A7",
+	"B0", "B1", "B2", "B3", "B4", "B5", "B6", "B7",
+	"C0", "C1", "C2", "C3", "C4", "C5", "C6", "C7",
+	"D0", "D1", "D2", "D3", "D4", "D5", "D6", "D7",
 };
 
 static const struct scope_config scope_models[] = {
@@ -200,8 +137,8 @@ static const struct scope_config scope_models[] = {
 		.analog_names = &scope_analog_channel_names,
 		.digital_names = &scope_digital_channel_names_8,
 
-		.coupling_options = &dlm_coupling_options,
-		.trigger_sources = &dlm_2ch_trigger_sources,
+		.coupling_options = &coupling_options,
+		.trigger_sources = &trigger_sources_2ch,
 
 		.num_xdivs = 10,
 		.num_ydivs = 8,
@@ -216,8 +153,8 @@ static const struct scope_config scope_models[] = {
 		.analog_names = &scope_analog_channel_names,
 		.digital_names = &scope_digital_channel_names_8,
 
-		.coupling_options = &dlm_coupling_options,
-		.trigger_sources = &dlm_4ch_trigger_sources,
+		.coupling_options = &coupling_options,
+		.trigger_sources = &trigger_sources_4ch,
 
 		.num_xdivs = 10,
 		.num_ydivs = 8,
@@ -234,8 +171,8 @@ static const struct scope_config scope_models[] = {
 		.analog_names = &scope_analog_channel_names,
 		.digital_names = NULL,
 
-		.coupling_options = &dlm_coupling_options,
-		.trigger_sources = &dlm_4ch_trigger_sources,
+		.coupling_options = &coupling_options,
+		.trigger_sources = &trigger_sources_4ch,
 
 		.num_xdivs = 10,
 		.num_ydivs = 8,
@@ -250,8 +187,8 @@ static const struct scope_config scope_models[] = {
 		.analog_names = &scope_analog_channel_names,
 		.digital_names = &scope_digital_channel_names_32,
 
-		.coupling_options = &dlm_coupling_options,
-		.trigger_sources = &dlm_4ch_trigger_sources,
+		.coupling_options = &coupling_options,
+		.trigger_sources = &trigger_sources_4ch,
 
 		.num_xdivs = 10,
 		.num_ydivs = 8,
@@ -266,8 +203,8 @@ static const struct scope_config scope_models[] = {
 		.analog_names = &scope_analog_channel_names,
 		.digital_names = &scope_digital_channel_names_32,
 
-		.coupling_options = &dlm_coupling_options,
-		.trigger_sources = &dlm_4ch_trigger_sources,
+		.coupling_options = &coupling_options,
+		.trigger_sources = &trigger_sources_4ch,
 
 		.num_xdivs = 10,
 		.num_ydivs = 8,
@@ -461,7 +398,7 @@ static int analog_channel_state_get(const struct sr_dev_inst *sdi,
 		if (dlm_analog_chan_vdiv_get(scpi, i + 1, &response) != SR_OK)
 			return SR_ERR;
 
-		if (array_float_get(response, dlm_vdivs, ARRAY_SIZE(dlm_vdivs),
+		if (array_float_get(response, ARRAY_AND_SIZE(dlm_vdivs),
 				&j) != SR_OK) {
 			g_free(response);
 			return SR_ERR;
@@ -699,8 +636,7 @@ SR_PRIV int dlm_scope_state_query(struct sr_dev_inst *sdi)
 	if (dlm_timebase_get(sdi->conn, &response) != SR_OK)
 		return SR_ERR;
 
-	if (array_float_get(response, dlm_timebases,
-			ARRAY_SIZE(dlm_timebases), &i) != SR_OK) {
+	if (array_float_get(response, ARRAY_AND_SIZE(dlm_timebases), &i) != SR_OK) {
 		g_free(response);
 		return SR_ERR;
 	}
@@ -1171,7 +1107,7 @@ SR_PRIV int dlm_data_receive(int fd, int revents, void *cb_data)
 		 * As of now we only support importing the current acquisition
 		 * data so we're going to stop at this point.
 		 */
-		sdi->driver->dev_acquisition_stop(sdi);
+		sr_dev_acquisition_stop(sdi);
 		return TRUE;
 	} else
 		devc->current_channel = devc->current_channel->next;

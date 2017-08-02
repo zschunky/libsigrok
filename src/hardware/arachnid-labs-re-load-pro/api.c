@@ -150,64 +150,28 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 static int config_list(uint32_t key, GVariant **data,
 	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
 {
-	GVariantBuilder gvb;
-	int ret;
-
-	/* Always available. */
-	if (key == SR_CONF_SCAN_OPTIONS) {
-		*data = g_variant_new_fixed_array(G_VARIANT_TYPE_UINT32,
-			scanopts, ARRAY_SIZE(scanopts), sizeof(uint32_t));
-		return SR_OK;
-	}
-
-	if (key == SR_CONF_DEVICE_OPTIONS && !sdi) {
-		*data = g_variant_new_fixed_array(G_VARIANT_TYPE_UINT32,
-			drvopts, ARRAY_SIZE(drvopts), sizeof(uint32_t));
-		return SR_OK;
-	}
-
-	if (!sdi)
-		return SR_ERR_ARG;
-
-	ret = SR_OK;
-
 	if (!cg) {
-		/* No channel group: global options. */
-		switch (key) {
-		case SR_CONF_DEVICE_OPTIONS:
-			*data = g_variant_new_fixed_array(G_VARIANT_TYPE_UINT32,
-				devopts, ARRAY_SIZE(devopts), sizeof(uint32_t));
-			break;
-		default:
-			return SR_ERR_NA;
-		}
+		return STD_CONFIG_LIST(key, data, sdi, cg, scanopts, drvopts, devopts);
 	} else {
 		switch (key) {
 		case SR_CONF_DEVICE_OPTIONS:
-			*data = g_variant_new_fixed_array(G_VARIANT_TYPE_UINT32,
-				devopts_cg, ARRAY_SIZE(devopts_cg), sizeof(uint32_t));
+			*data = std_gvar_array_u32(ARRAY_AND_SIZE(devopts_cg));
 			break;
 		case SR_CONF_CURRENT_LIMIT:
-			g_variant_builder_init(&gvb, G_VARIANT_TYPE_ARRAY);
-			/* Min, max, step. */
-			g_variant_builder_add_value(&gvb, g_variant_new_double(0.0));
-			g_variant_builder_add_value(&gvb, g_variant_new_double(6.0));
-			g_variant_builder_add_value(&gvb, g_variant_new_double(0.001)); /* 1mA steps */
-			*data = g_variant_builder_end(&gvb);
+			*data = std_gvar_min_max_step(0.0, 6.0, 0.001);
 			break;
 		default:
 			return SR_ERR_NA;
 		}
 	}
 
-	return ret;
+	return SR_OK;
 }
 
 static int config_get(uint32_t key, GVariant **data,
 	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
 {
 	struct dev_context *devc;
-	int ret;
 	float fvalue;
 
 	(void)cg;
@@ -223,7 +187,6 @@ static int config_get(uint32_t key, GVariant **data,
 	 *  - SR_CONF_ENABLED (state cannot be queried, only set)
 	 */
 
-	ret = SR_OK;
 	switch (key) {
 	case SR_CONF_LIMIT_SAMPLES:
 	case SR_CONF_LIMIT_MSEC:
@@ -267,39 +230,31 @@ static int config_get(uint32_t key, GVariant **data,
 		return SR_ERR_NA;
 	}
 
-	return ret;
+	return SR_OK;
 }
 
 static int config_set(uint32_t key, GVariant *data,
 	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
 {
 	struct dev_context *devc;
-	int ret;
 
 	(void)cg;
 
-	if (sdi->status != SR_ST_ACTIVE)
-		return SR_ERR_DEV_CLOSED;
-
 	devc = sdi->priv;
 
-	ret = SR_OK;
 	switch (key) {
 	case SR_CONF_LIMIT_SAMPLES:
 	case SR_CONF_LIMIT_MSEC:
 		return sr_sw_limits_config_set(&devc->limits, key, data);
 	case SR_CONF_ENABLED:
-		ret = reloadpro_set_on_off(sdi, g_variant_get_boolean(data));
-		break;
+		return reloadpro_set_on_off(sdi, g_variant_get_boolean(data));
 	case SR_CONF_CURRENT_LIMIT:
-		ret = reloadpro_set_current_limit(sdi,
-			g_variant_get_double(data));
-		break;
+		return reloadpro_set_current_limit(sdi, g_variant_get_double(data));
 	default:
-		ret = SR_ERR_NA;
+		return SR_ERR_NA;
 	}
 
-	return ret;
+	return SR_OK;
 }
 
 static int dev_acquisition_start(const struct sr_dev_inst *sdi)
@@ -307,9 +262,6 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 	int ret;
 	struct dev_context *devc;
 	struct sr_serial_dev_inst *serial;
-
-	if (sdi->status != SR_ST_ACTIVE)
-		return SR_ERR_DEV_CLOSED;
 
 	devc = sdi->priv;
 	serial = sdi->conn;
@@ -322,7 +274,6 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 		return SR_ERR;
 	}
 
-	/* Poll every 100ms, or whenever some data comes in. */
 	serial_source_add(sdi->session, serial, G_IO_IN, 100,
 			  reloadpro_receive_data, (void *)sdi);
 
@@ -343,6 +294,7 @@ static struct sr_dev_driver arachnid_labs_re_load_pro_driver_info = {
 	.cleanup = std_cleanup,
 	.scan = scan,
 	.dev_list = std_dev_list,
+	.dev_clear = std_dev_clear,
 	.config_get = config_get,
 	.config_set = config_set,
 	.config_list = config_list,

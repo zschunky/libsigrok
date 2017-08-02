@@ -21,7 +21,7 @@
 # We require at least autoconf 2.63 (AC_INIT format changed there).
 AC_PREREQ([2.63])
 
-AC_INIT([libsigrok], [0.5.0],
+AC_INIT([libsigrok], [0.6.0],
 	[sigrok-devel@lists.sourceforge.net],
 	[libsigrok], [http://www.sigrok.org])
 AC_CONFIG_MACRO_DIR([m4])
@@ -68,7 +68,7 @@ SR_PKG_VERSION_SET([SR_PACKAGE_VERSION], [AC_PACKAGE_VERSION])
 # The algorithm for determining which number to change (and how) is nontrivial!
 # http://www.gnu.org/software/libtool/manual/libtool.html#Updating-version-info
 # Format: current:revision:age.
-SR_LIB_VERSION_SET([SR_LIB_VERSION], [3:0:0])
+SR_LIB_VERSION_SET([SR_LIB_VERSION], [4:0:0])
 
 AM_CONDITIONAL([WIN32], [test -z "${host_os##mingw*}" || test -z "${host_os##cygwin*}"])
 
@@ -234,6 +234,7 @@ SR_DRIVER([ChronoVu LA], [chronovu-la], [libusb libftdi])
 SR_DRIVER([Colead SLM], [colead-slm], [libserialport])
 SR_DRIVER([Conrad DIGI 35 CPU], [conrad-digi-35-cpu], [libserialport])
 SR_DRIVER([demo], [demo])
+SR_DRIVER([DreamSourceLab DSLogic], [dreamsourcelab-dslogic], [libusb])
 SR_DRIVER([Fluke DMM], [fluke-dmm], [libserialport])
 SR_DRIVER([FTDI LA], [ftdi-la], [libusb libftdi])
 SR_DRIVER([fx2lafw], [fx2lafw], [libusb])
@@ -264,6 +265,7 @@ SR_DRIVER([Pipistrello-OLS], [pipistrello-ols], [libftdi])
 SR_DRIVER([Rigol DS], [rigol-ds])
 SR_DRIVER([Rohde&Schwarz SME-0x], [rohde-schwarz-sme-0x], [libserialport])
 SR_DRIVER([Saleae Logic16], [saleae-logic16], [libusb])
+SR_DRIVER([Saleae Logic Pro], [saleae-logic-pro], [libusb])
 SR_DRIVER([SCPI PPS], [scpi-pps])
 SR_DRIVER([serial DMM], [serial-dmm], [libserialport])
 SR_DRIVER([serial LCR], [serial-lcr], [libserialport])
