@@ -220,7 +220,7 @@ static GSList *dev_list(const struct sr_dev_driver *di)
 
 static int dev_clear(const struct sr_dev_driver *di)
 {
-	return std_dev_clear(di, NULL);
+	return std_dev_clear(di);
 }
 
 static int dev_open(struct sr_dev_inst *sdi)
@@ -246,7 +246,7 @@ static int dev_close(struct sr_dev_inst *sdi)
 
 static int cleanup(const struct sr_dev_driver *di)
 {
-	return std_dev_clear(di, NULL);
+	return std_dev_clear(di);
 }
 
 static int config_get(uint32_t key, GVariant **data,
