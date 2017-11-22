@@ -246,7 +246,7 @@ static int dev_close(struct sr_dev_inst *sdi)
 
 static int cleanup(const struct sr_dev_driver *di)
 {
-	return std_dev_clear(di);
+	return std_cleanup(di);
 }
 
 static int config_get(uint32_t key, GVariant **data,
