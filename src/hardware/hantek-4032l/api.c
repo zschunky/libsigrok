@@ -131,33 +131,65 @@ static int init(struct sr_dev_driver *di, struct sr_context *sr_ctx)
 
 static GSList *scan(struct sr_dev_driver *di, GSList *options)
 {
-	struct drv_context *context=di->context;
+	struct drv_context *drvc = di->context;
+	GSList *l, *devices, *conn_devices;
+	libusb_device **devlist;
+	struct libusb_device_descriptor des;
+	const char *conn;
+	int i;
+	char connection_id[64];
 
-	// scan for device selection option
-	while (options && ((struct sr_config *)options->data)->key != SR_CONF_CONN)
-		options=options->next;
+	devices = NULL;
+	conn_devices = NULL;
+	drvc->instances = NULL;
+	conn = NULL;
 
-	// get list of connected relevant usb devices
-	GSList *usb_device_list;
-	if (options)
-		usb_device_list=sr_usb_find(context->sr_ctx->libusb_ctx, g_variant_get_string(((struct sr_config *)options->data)->data, NULL));
+	for (l = options; l; l = l->next) {
+		struct sr_config *src = l->data;
+		if (src->key == SR_CONF_CONN) {
+			conn = g_variant_get_string(src->data, NULL);
+			break;
+		}
+	}
+
+	if (conn)
+		conn_devices = sr_usb_find(drvc->sr_ctx->libusb_ctx, conn);
 	else
-		usb_device_list=sr_usb_find(context->sr_ctx->libusb_ctx, H4032L_PROTOCOL_USB_DEVICE);
+		conn_devices = NULL;
 
-	// assemlbe sr device list
-	GSList *device_list=NULL;
-	while (usb_device_list) {
-		// create device and set several properties
+	// find all hantek devices
+	libusb_get_device_list(drvc->sr_ctx->libusb_ctx, &devlist);
+	for (i = 0; devlist[i]; i++) {
+		if (conn) {
+			struct sr_usb_dev_inst *usb = NULL;
+			for (l = conn_devices; l; l = l->next) {
+				usb = l->data;
+				if (usb->bus == libusb_get_bus_number(devlist[i])
+					&& usb->address == libusb_get_device_address(devlist[i]))
+					break;
+			}
+			if (!l)
+				/* This device matched none of the ones that
+				 * matched the conn specification. */
+				continue;
+		}
+
+		libusb_get_device_descriptor(devlist[i], &des);
+
+		if (des.idVendor != H4032L_PROTOCOL_USB_VENDOR ||
+			des.idProduct != H4032L_PROTOCOL_USB_PRODUCT)
+			continue;
+
+		usb_get_port_path(devlist[i], connection_id, sizeof(connection_id));
+
 		struct sr_dev_inst *device = g_malloc0(sizeof(struct sr_dev_inst));
 		device->driver = &hantek_4032l_driver_info;
-		device->status = SR_ST_INACTIVE;
-		device->inst_type = SR_INST_USB;
 		device->vendor = g_strdup("Hantek");
 		device->model = g_strdup("4032L");
-		device->conn=usb_device_list->data;
+		device->connection_id = g_strdup(connection_id);
 
 		// create channel groups
-		struct sr_channel_group *channel_groups[2];		 
+		struct sr_channel_group *channel_groups[2];
 		for (int group=0; group<2; group++) {
 			struct sr_channel_group *channel_group=g_malloc0(sizeof(struct sr_channel_group));
 			channel_group->name=g_strdup_printf("%c", 'A' + group);
@@ -169,12 +201,12 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 		for (int index=0; index < NUM_CHANNELS; index++) {
 			char channel_name[4];
 			sprintf(channel_name,"%c%d", 'A'+ (index&1), index /2);
-		
+
 			struct sr_channel *channel = sr_channel_new(device, index, SR_CHANNEL_LOGIC, TRUE, channel_name);
 			struct sr_channel_group *channel_group=channel_groups[index&1];
 			channel_group->channels = g_slist_append(channel_group->channels, channel);
 		}
-		
+
 		// create device context
 		struct h4032l_protocol_device_context *device_context = g_malloc0(sizeof(struct h4032l_protocol_device_context));
 
@@ -191,31 +223,22 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 		// set ratio
 		device_context->gcapture_ratio=5;
 
-		// create libusb transfer 
+		// create libusb transfer
 		device_context->usb_transfer=libusb_alloc_transfer(0);
 
-		// save device context
-		device->priv=device_context;
+		device->priv = device_context;
+		devices = g_slist_append(devices, device);
 
-		// append device
-		device_list = g_slist_append(device_list, device);
-			
-		// add device to known instances
-		context->instances = g_slist_append(context->instances, device);
-
-		// select next usb device
-		usb_device_list=usb_device_list->next;
+		device->status = SR_ST_INACTIVE;
+		device->inst_type = SR_INST_USB;
+		device->conn = sr_usb_dev_inst_new(libusb_get_bus_number(devlist[i]),
+			libusb_get_device_address(devlist[i]), NULL);
 	}
 
-	// clean up
-	g_slist_free(usb_device_list);
+	g_slist_free_full(conn_devices, (GDestroyNotify)sr_usb_dev_inst_free);
+	libusb_free_device_list(devlist, 1);
 
-	return device_list;
-}
-
-static GSList *dev_list(const struct sr_dev_driver *di)
-{
-	return ((struct drv_context *)(di->context))->instances;
+	return std_scan_complete(di, devices);
 }
 
 static int dev_clear(const struct sr_dev_driver *di)
@@ -225,21 +248,52 @@ static int dev_clear(const struct sr_dev_driver *di)
 
 static int dev_open(struct sr_dev_inst *sdi)
 {
-	struct drv_context *context=sdi->driver->context;
-	sdi->status = SR_ST_ACTIVE;
+	struct sr_usb_dev_inst *usb = sdi->conn;
+	int ret;
 
-	return sr_usb_open(context->sr_ctx->libusb_ctx, sdi->conn);
+	ret = h4032l_protocol_dev_open(sdi);
+	if (ret != SR_OK) {
+		sr_err("Unable to open device.");
+		return SR_ERR;
+	}
+
+	ret = libusb_claim_interface(usb->devhdl, USB_INTERFACE);
+	if (ret != 0) {
+		switch (ret) {
+		case LIBUSB_ERROR_BUSY:
+			sr_err("Unable to claim USB interface. Another "
+				"program or driver has already claimed it.");
+			break;
+		case LIBUSB_ERROR_NO_DEVICE:
+			sr_err("Device has been disconnected.");
+			break;
+		default:
+			sr_err("Unable to claim interface: %s.",
+				libusb_error_name(ret));
+			break;
+		}
+
+		return SR_ERR;
+	}
+
+	return SR_OK;
 }
 
 static int dev_close(struct sr_dev_inst *sdi)
 {
+	struct sr_usb_dev_inst *usb;
+
+	usb = sdi->conn;
+
+	if (!usb->devhdl)
+		return SR_ERR_BUG;
+
+	sr_info("Closing device on %d.%d (logical) / %s (physical) interface %d.",
+		usb->bus, usb->address, sdi->connection_id, USB_INTERFACE);
+	libusb_release_interface(usb->devhdl, USB_INTERFACE);
+	libusb_close(usb->devhdl);
+	usb->devhdl = NULL;
 	sdi->status = SR_ST_INACTIVE;
-	//struct sr_usb_dev_inst *usb=sdi->conn;
-	//if (!usb->devhdl)
-		//return SR_ERR;
-	//libusb_release_interface(usb->devhdl, 0);
-	//libusb_close(usb->devhdl);
-	sr_usb_close(sdi->conn);
 
 	return SR_OK;
 }
@@ -500,7 +554,7 @@ SR_PRIV struct sr_dev_driver hantek_4032l_driver_info = {
 	.init = init,
 	.cleanup = cleanup,
 	.scan = scan,
-	.dev_list = dev_list,
+	.dev_list = std_dev_list,
 	.dev_clear = dev_clear,
 	.config_get = config_get,
 	.config_set = config_set,

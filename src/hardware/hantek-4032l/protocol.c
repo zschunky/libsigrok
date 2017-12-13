@@ -197,3 +197,57 @@ SR_PRIV int h4032l_protocol_start(const struct sr_dev_inst *sdi)
 	std_session_send_df_header(sdi);
 	return SR_OK;
 }
+
+SR_PRIV int h4032l_protocol_dev_open(struct sr_dev_inst *sdi)
+{
+	struct drv_context *drvc = sdi->driver->context;
+	struct sr_usb_dev_inst *usb = sdi->conn;
+	struct libusb_device_descriptor des;
+	libusb_device **devlist;
+	int ret, i, device_count;
+	char connection_id[64];
+
+	device_count = libusb_get_device_list(drvc->sr_ctx->libusb_ctx, &devlist);
+	if (device_count < 0) {
+		sr_err("Failed to get device list: %s.", libusb_error_name(device_count));
+		return SR_ERR;
+	}
+
+	for (i = 0;i < device_count; i++) {
+		libusb_get_device_descriptor(devlist[i], &des);
+
+		if (des.idVendor != H4032L_PROTOCOL_USB_VENDOR ||
+			des.idProduct != H4032L_PROTOCOL_USB_PRODUCT)
+			continue;
+
+		if ((sdi->status == SR_ST_INITIALIZING) ||
+			(sdi->status == SR_ST_INACTIVE)) {
+			/*
+			 * Check device by its physical USB bus/port address.
+			 */
+			usb_get_port_path(devlist[i], connection_id, sizeof(connection_id));
+			if (strcmp(sdi->connection_id, connection_id))
+				/* This is not the one. */
+				continue;
+		}
+
+		if (!(ret = libusb_open(devlist[i], &usb->devhdl))) {
+			if (usb->address == 0xff)
+				/*
+				 * First time we touch this device after FW
+				 * upload, so we don't know the address yet.
+				 */
+				usb->address = libusb_get_device_address(devlist[i]);
+		} else {
+			sr_err("Failed to open device: %s.", libusb_error_name(ret));
+			ret = SR_ERR;
+			break;
+		}
+
+		ret = SR_OK;
+		break;
+	}
+
+	libusb_free_device_list(devlist, 1);
+	return ret;
+}
