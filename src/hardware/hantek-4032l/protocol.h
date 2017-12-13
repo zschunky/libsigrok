@@ -2,6 +2,7 @@
  * This file is part of the libsigrok project.
  *
  * Copyright (C) 2016 Andreas Zschunke <andreas.zschunke@gmx.net>
+ * Copyright (C) 2017 Andrej Valek <andy@skyrain.eu>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
