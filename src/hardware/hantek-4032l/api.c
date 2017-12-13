@@ -166,7 +166,7 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 		}
 
 		// assemble channel list and add channel to channel groups
-		for (int index=0; index<32; index++) {
+		for (int index=0; index < NUM_CHANNELS; index++) {
 			char channel_name[4];
 			sprintf(channel_name,"%c%d", 'A'+ (index&1), index /2);
 		

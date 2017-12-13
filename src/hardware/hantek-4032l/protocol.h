@@ -25,6 +25,12 @@
 #include <libsigrok/libsigrok.h>
 #include "libsigrok-internal.h"
 
+// number of channels
+#define NUM_CHANNELS 32
+
+// usb transfer timeout [ms]
+#define H4032L_PROTOCOL_USB_TIMEOUT 500
+
 #define LOG_PREFIX "hantek-4032l"
 #define H4032L_PROTOCOL_USB_DEVICE "04b5.4032"
 #define H4032L_PROTOCOL_COMMAND_PACKET_MAGIC 0x017f

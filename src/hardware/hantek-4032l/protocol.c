@@ -129,12 +129,12 @@ void LIBUSB_CALL h4032l_protocol_usb_callback(struct libusb_transfer *transfer)
 			if (command) {
 				// setup new usb command packet, reuse transfer object
 				sr_dbg("new command:%d", device_context->status);
-				libusb_fill_bulk_transfer(transfer, usb->devhdl, 2 | LIBUSB_ENDPOINT_OUT, (unsigned char *)&device_context->command_packet, sizeof(struct h4032l_protocol_command_packet), h4032l_protocol_usb_callback, (void*)sdi, 500);
+				libusb_fill_bulk_transfer(transfer, usb->devhdl, 2 | LIBUSB_ENDPOINT_OUT, (unsigned char *)&device_context->command_packet, sizeof(struct h4032l_protocol_command_packet), h4032l_protocol_usb_callback, (void*)sdi, H4032L_PROTOCOL_USB_TIMEOUT);
 			}
 			else {
 				// setup new usb poll packet, reuse transfer object
 				sr_dbg("poll:%d", device_context->status);
-				libusb_fill_bulk_transfer(transfer, usb->devhdl, 6 | LIBUSB_ENDPOINT_IN, device_context->buffer, 512, h4032l_protocol_usb_callback, (void*)sdi, 500);
+				libusb_fill_bulk_transfer(transfer, usb->devhdl, 6 | LIBUSB_ENDPOINT_IN, device_context->buffer, ARRAY_SIZE(device_context->buffer), h4032l_protocol_usb_callback, (void*)sdi, H4032L_PROTOCOL_USB_TIMEOUT);
 			}
 			int ret;
 			// send prepared usb packet
@@ -186,7 +186,7 @@ SR_PRIV int h4032l_protocol_start(const struct sr_dev_inst *sdi)
 	device_context->status=H4032L_PROTOCOL_STATUS_COMMAND_CONFIGURE;
 	device_context->remaining_samples=device_context->command_packet.sample_size;
 	struct libusb_transfer *transfer = libusb_alloc_transfer(0);
-	libusb_fill_bulk_transfer(transfer, usb->devhdl, 2 | LIBUSB_ENDPOINT_OUT, (unsigned char *)&device_context->command_packet, sizeof(struct h4032l_protocol_command_packet), h4032l_protocol_usb_callback, (void*)sdi, 500);
+	libusb_fill_bulk_transfer(transfer, usb->devhdl, 2 | LIBUSB_ENDPOINT_OUT, (unsigned char *)&device_context->command_packet, sizeof(struct h4032l_protocol_command_packet), h4032l_protocol_usb_callback, (void*)sdi, H4032L_PROTOCOL_USB_TIMEOUT);
 	int ret;
 	if ((ret = libusb_submit_transfer(transfer)) != 0) {
 		sr_err("Failed to submit transfer: %s.", libusb_error_name(ret));
