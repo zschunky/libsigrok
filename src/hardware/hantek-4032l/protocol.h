@@ -2,6 +2,7 @@
  * This file is part of the libsigrok project.
  *
  * Copyright (C) 2016 Andreas Zschunke <andreas.zschunke@gmx.net>
+ * Copyright (C) 2017 Andrej Valek <andy@skyrain.eu>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,11 +23,21 @@
 
 #include <stdint.h>
 #include <glib.h>
+#include <string.h>
 #include <libsigrok/libsigrok.h>
 #include "libsigrok-internal.h"
 
+#define USB_INTERFACE 0
+
+// number of channels
+#define NUM_CHANNELS 32
+
+// usb transfer timeout [ms]
+#define H4032L_PROTOCOL_USB_TIMEOUT 500
+
 #define LOG_PREFIX "hantek-4032l"
-#define H4032L_PROTOCOL_USB_DEVICE "04b5.4032"
+#define H4032L_PROTOCOL_USB_VENDOR 0x04b5
+#define H4032L_PROTOCOL_USB_PRODUCT 0x4032
 #define H4032L_PROTOCOL_COMMAND_PACKET_MAGIC 0x017f
 #define H4032L_PROTOCOL_STATUS_PACKET_MAGIC 0x2B1A037F
 #define H4032L_PROTOCOL_START_PACKET_MAGIC 0x2B1A027F
@@ -148,5 +159,6 @@ SR_PRIV int h4032l_protocol_receive_data(int fd, int revents, void *cb_data);
 SR_PRIV uint16_t h4032l_protocol_voltage2pwm(double voltage);
 SR_PRIV void LIBUSB_CALL h4032l_protocol_usb_callback(struct libusb_transfer *transfer);
 SR_PRIV int h4032l_protocol_start(const struct sr_dev_inst *sdi);
+SR_PRIV int h4032l_protocol_dev_open(struct sr_dev_inst *sdi);
 
 #endif
