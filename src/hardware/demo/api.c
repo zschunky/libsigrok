@@ -400,6 +400,7 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 
 	devc = sdi->priv;
 	devc->sent_samples = 0;
+	devc->sent_frame_samples = 0;
 
 	/*
 	 * Determine the numbers of logic and analog channels that are
@@ -453,6 +454,9 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 
 	std_session_send_df_header(sdi);
 
+	if (SAMPLES_PER_FRAME > 0)
+		std_session_send_frame_begin(sdi);
+
 	/* We use this timestamp to decide how many more samples to send. */
 	devc->start_us = g_get_monotonic_time();
 	devc->spent_us = 0;
@@ -464,6 +468,10 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 static int dev_acquisition_stop(struct sr_dev_inst *sdi)
 {
 	sr_session_source_remove(sdi->session, -1);
+
+	if (SAMPLES_PER_FRAME > 0)
+		std_session_send_frame_end(sdi);
+
 	std_session_send_df_end(sdi);
 
 	return SR_OK;

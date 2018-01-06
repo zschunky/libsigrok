@@ -273,9 +273,8 @@ static void logic_generator(struct sr_dev_inst *sdi, uint64_t size)
 		break;
 	case PATTERN_INC:
 		for (i = 0; i < size; i++) {
-			for (j = 0; j < devc->logic_unitsize; j++) {
+			for (j = 0; j < devc->logic_unitsize; j++)
 				devc->logic_data[i + j] = devc->step;
-			}
 			devc->step++;
 		}
 		break;
@@ -460,12 +459,24 @@ SR_PRIV int demo_prepare_data(int fd, int revents, void *cb_data)
 	/* How many samples are outstanding since the last round? */
 	samples_todo = (todo_us * devc->cur_samplerate + G_USEC_PER_SEC - 1)
 			/ G_USEC_PER_SEC;
+
 	if (devc->limit_samples > 0) {
 		if (devc->limit_samples < devc->sent_samples)
 			samples_todo = 0;
 		else if (devc->limit_samples - devc->sent_samples < samples_todo)
 			samples_todo = devc->limit_samples - devc->sent_samples;
 	}
+
+	if (samples_todo == 0)
+		return G_SOURCE_CONTINUE;
+
+#if (SAMPLES_PER_FRAME > 0) /* Avoid "comparison < 0 always false" warning. */
+	/* Never send more samples than a frame can fit... */
+	samples_todo = MIN(samples_todo, SAMPLES_PER_FRAME);
+	/* ...or than we need to finish the current frame. */
+	samples_todo = MIN(samples_todo, SAMPLES_PER_FRAME - devc->sent_frame_samples);
+#endif
+
 	/* Calculate the actual time covered by this run back from the sample
 	 * count, rounded towards zero. This avoids getting stuck on a too-low
 	 * time delta with no samples being sent due to round-off.
@@ -516,7 +527,15 @@ SR_PRIV int demo_prepare_data(int fd, int revents, void *cb_data)
 		return G_SOURCE_REMOVE;
 	}
 	devc->sent_samples += samples_todo;
+	devc->sent_frame_samples += samples_todo;
 	devc->spent_us += todo_us;
+
+#if (SAMPLES_PER_FRAME > 0) /* Avoid "comparison >= 0 always true" warning. */
+	if (devc->sent_frame_samples >= SAMPLES_PER_FRAME) {
+		std_session_send_frame_end(sdi);
+		devc->sent_frame_samples = 0;
+	}
+#endif
 
 	if ((devc->limit_samples > 0 && devc->sent_samples >= devc->limit_samples)
 			|| (limit_us > 0 && devc->spent_us >= limit_us)) {
@@ -535,6 +554,11 @@ SR_PRIV int demo_prepare_data(int fd, int revents, void *cb_data)
 		}
 		sr_dbg("Requested number of samples reached.");
 		sr_dev_acquisition_stop(sdi);
+	} else {
+#if (SAMPLES_PER_FRAME > 0)
+		if (devc->sent_frame_samples == 0)
+			std_session_send_frame_begin(sdi);
+#endif
 	}
 
 	return G_SOURCE_CONTINUE;

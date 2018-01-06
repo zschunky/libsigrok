@@ -86,7 +86,7 @@ static int parse_value(const uint8_t *buf, struct metex14_info *info,
 		return SR_OK;
 
 	/* Bytes 2-8: Sign, value (up to 5 digits) and decimal point */
-	sscanf((const char *)&valstr, "%f", result);
+	sr_atof_ascii((const char *)&valstr, result);
 
 	dot_pos = strcspn(valstr, ".");
 	if (dot_pos < cnt)
@@ -293,7 +293,7 @@ SR_PRIV int sr_metex14_packet_request(struct sr_serial_dev_inst *serial)
 
 	sr_spew("Requesting DMM packet.");
 
-	return (serial_write_nonblocking(serial, &wbuf, 1) == 1) ? SR_OK : SR_ERR;
+	return serial_write_blocking(serial, &wbuf, 1, 0);
 }
 #endif
 

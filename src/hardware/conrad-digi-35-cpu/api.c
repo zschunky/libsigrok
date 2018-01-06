@@ -32,13 +32,14 @@ static const uint32_t drvopts[] = {
 };
 
 static const uint32_t devopts[] = {
-	SR_CONF_VOLTAGE | SR_CONF_SET,
-	SR_CONF_CURRENT | SR_CONF_SET,
+	SR_CONF_VOLTAGE_TARGET | SR_CONF_SET | SR_CONF_LIST,
+	SR_CONF_CURRENT_LIMIT | SR_CONF_SET | SR_CONF_LIST,
 	SR_CONF_OVER_CURRENT_PROTECTION_ENABLED | SR_CONF_SET,
 };
 
 static GSList *scan(struct sr_dev_driver *di, GSList *options)
 {
+	struct dev_context *devc;
 	struct sr_dev_inst *sdi;
 	struct sr_config *src;
 	struct sr_serial_dev_inst *serial;
@@ -83,8 +84,11 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 	sdi->status = SR_ST_INACTIVE;
 	sdi->vendor = g_strdup("Conrad");
 	sdi->model = g_strdup("DIGI 35 CPU");
+	devc = g_malloc0(sizeof(struct dev_context));
+	sr_sw_limits_init(&devc->limits);
+	sdi->inst_type = SR_INST_SERIAL;
 	sdi->conn = serial;
-	sdi->priv = NULL;
+	sdi->priv = devc;
 	sr_channel_new(sdi, 0, SR_CHANNEL_ANALOG, TRUE, "CH1");
 
 	return std_scan_complete(di, g_slist_append(NULL, sdi));
@@ -98,16 +102,16 @@ static int config_set(uint32_t key, GVariant *data,
 	(void)cg;
 
 	switch (key) {
-	case SR_CONF_VOLTAGE:
+	case SR_CONF_VOLTAGE_TARGET:
 		dblval = g_variant_get_double(data);
 		if ((dblval < 0.0) || (dblval > 35.0)) {
 			sr_err("Voltage out of range (0 - 35.0)!");
 			return SR_ERR_ARG;
 		}
 		return send_msg1(sdi, 'V', (int) (dblval * 10 + 0.5));
-	case SR_CONF_CURRENT:
+	case SR_CONF_CURRENT_LIMIT:
 		dblval = g_variant_get_double(data);
-		if ((dblval < 0.01) || (dblval > 2.55)) {
+		if ((dblval < 0.00) || (dblval > 2.55)) {
 			sr_err("Current out of range (0 - 2.55)!");
 			return SR_ERR_ARG;
 		}
@@ -127,7 +131,21 @@ static int config_set(uint32_t key, GVariant *data,
 static int config_list(uint32_t key, GVariant **data,
 	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
 {
-	return STD_CONFIG_LIST(key, data, sdi, cg, scanopts, drvopts, devopts);
+	switch (key) {
+	case SR_CONF_SCAN_OPTIONS:
+	case SR_CONF_DEVICE_OPTIONS:
+		return STD_CONFIG_LIST(key, data, sdi, cg, scanopts, drvopts, devopts);
+	case SR_CONF_VOLTAGE_TARGET:
+		*data = std_gvar_min_max_step(0.0, 35.0, 0.1);
+		break;
+	case SR_CONF_CURRENT_LIMIT:
+		*data = std_gvar_min_max_step(0.0, 2.55, 0.01);
+		break;
+	default:
+		return SR_ERR_NA;
+	}
+
+	return SR_OK;
 }
 
 static struct sr_dev_driver conrad_digi_35_cpu_driver_info = {

@@ -1,7 +1,7 @@
 /*
  * This file is part of the libsigrok project.
  *
- * Copyright (C) 2014 Kumar Abhishek <abhishek@theembeddedkitchen.net>
+ * Copyright (C) 2014-17 Kumar Abhishek <abhishek@theembeddedkitchen.net>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,6 +22,7 @@
 #include "beaglelogic.h"
 
 static const uint32_t scanopts[] = {
+	SR_CONF_CONN,
 	SR_CONF_NUM_LOGIC_CHANNELS,
 };
 
@@ -32,7 +33,7 @@ static const uint32_t drvopts[] = {
 static const uint32_t devopts[] = {
 	SR_CONF_CONTINUOUS,
 	SR_CONF_LIMIT_SAMPLES | SR_CONF_GET | SR_CONF_SET,
-	SR_CONF_SAMPLERATE | SR_CONF_GET | SR_CONF_SET,
+	SR_CONF_SAMPLERATE | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
 	SR_CONF_TRIGGER_MATCH | SR_CONF_LIST,
 	SR_CONF_CAPTURE_RATIO | SR_CONF_GET | SR_CONF_SET,
 	SR_CONF_NUM_LOGIC_CHANNELS | SR_CONF_GET,
@@ -58,67 +59,78 @@ static const uint64_t samplerates[] = {
 	SR_HZ(1),
 };
 
-static struct dev_context *beaglelogic_devc_alloc(void)
-{
-	struct dev_context *devc;
-
-	devc = g_malloc0(sizeof(struct dev_context));
-
-	/* Default non-zero values (if any) */
-	devc->fd = -1;
-	devc->limit_samples = (uint64_t)-1;
-
-	return devc;
-}
-
 static GSList *scan(struct sr_dev_driver *di, GSList *options)
 {
 	GSList *l;
 	struct sr_config *src;
 	struct sr_dev_inst *sdi;
 	struct dev_context *devc;
+	const char *conn = NULL;
+	gchar **params;
 	int i, maxch;
 
-	/* Probe for /dev/beaglelogic */
-	if (!g_file_test(BEAGLELOGIC_DEV_NODE, G_FILE_TEST_EXISTS))
-		return NULL;
-
-	sdi = g_malloc0(sizeof(struct sr_dev_inst));
-	sdi->status = SR_ST_INACTIVE;
-	sdi->model = g_strdup("BeagleLogic");
-	sdi->version = g_strdup("1.0");
-
-	/* Unless explicitly specified, keep max channels to 8 only */
-	maxch = 8;
+	maxch = NUM_CHANNELS;
 	for (l = options; l; l = l->next) {
 		src = l->data;
 		if (src->key == SR_CONF_NUM_LOGIC_CHANNELS)
 			maxch = g_variant_get_int32(src->data);
+		if (src->key == SR_CONF_CONN)
+			conn = g_variant_get_string(src->data, NULL);
 	}
 
-	/* We need to test for number of channels by opening the node */
-	devc = beaglelogic_devc_alloc();
-
-	if (beaglelogic_open_nonblock(devc) != SR_OK) {
-		g_free(devc);
-		sr_dev_inst_free(sdi);
-
-		return NULL;
-	}
-
-	if (maxch > 8) {
-		maxch = NUM_CHANNELS;
-		devc->sampleunit = BL_SAMPLEUNIT_16_BITS;
+	/* Probe for /dev/beaglelogic if not connecting via TCP */
+	if (!conn) {
+		if (!g_file_test(BEAGLELOGIC_DEV_NODE, G_FILE_TEST_EXISTS))
+			return NULL;
 	} else {
-		maxch = 8;
-		devc->sampleunit = BL_SAMPLEUNIT_8_BITS;
+		params = g_strsplit(conn, "/", 0);
+		if (!params || !params[1] || !params[2]) {
+			sr_err("Invalid Parameters.");
+			g_strfreev(params);
+			return NULL;
+		}
+		if (g_ascii_strncasecmp(params[0], "tcp", 3)) {
+			sr_err("Only TCP (tcp-raw) protocol is currently supported.");
+			g_strfreev(params);
+			return NULL;
+		}
 	}
 
-	beaglelogic_set_sampleunit(devc);
-	beaglelogic_close(devc);
+	maxch = (maxch > 8) ? NUM_CHANNELS : 8;
 
-	sr_info("BeagleLogic device found at "BEAGLELOGIC_DEV_NODE);
+	sdi = g_new0(struct sr_dev_inst, 1);
+	sdi->status = SR_ST_INACTIVE;
+	sdi->model = g_strdup("BeagleLogic");
+	sdi->version = g_strdup("1.0");
 
+	devc = g_malloc0(sizeof(struct dev_context));
+
+	/* Default non-zero values (if any) */
+	devc->fd = -1;
+	devc->limit_samples = (uint64_t)10000000;
+	devc->tcp_buffer = 0;
+
+	if (!conn) {
+		devc->beaglelogic = &beaglelogic_native_ops;
+		sr_info("BeagleLogic device found at "BEAGLELOGIC_DEV_NODE);
+	} else {
+		devc->read_timeout = 1000 * 1000;
+		devc->beaglelogic = &beaglelogic_tcp_ops;
+		devc->address = g_strdup(params[1]);
+		devc->port = g_strdup(params[2]);
+		g_strfreev(params);
+
+		if (devc->beaglelogic->open(devc) != SR_OK)
+			goto err_free;
+		if (beaglelogic_tcp_detect(devc) != SR_OK)
+			goto err_free;
+		if (devc->beaglelogic->close(devc) != SR_OK)
+			goto err_free;
+		sr_info("BeagleLogic device found at %s : %s",
+			devc->address, devc->port);
+	}
+
+	/* Fill the channels */
 	for (i = 0; i < maxch; i++)
 		sr_channel_new(sdi, i, SR_CHANNEL_LOGIC, TRUE,
 				channel_names[i]);
@@ -126,6 +138,16 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 	sdi->priv = devc;
 
 	return std_scan_complete(di, g_slist_append(NULL, sdi));
+
+err_free:
+	g_free(sdi->model);
+	g_free(sdi->version);
+	g_free(devc->address);
+	g_free(devc->port);
+	g_free(devc);
+	g_free(sdi);
+
+	return NULL;
 }
 
 static int dev_open(struct sr_dev_inst *sdi)
@@ -133,26 +155,37 @@ static int dev_open(struct sr_dev_inst *sdi)
 	struct dev_context *devc = sdi->priv;
 
 	/* Open BeagleLogic */
-	if (beaglelogic_open_nonblock(devc))
+	if (devc->beaglelogic->open(devc))
 		return SR_ERR;
 
 	/* Set fd and local attributes */
-	devc->pollfd.fd = devc->fd;
+	if (devc->beaglelogic == &beaglelogic_tcp_ops)
+		devc->pollfd.fd = devc->socket;
+	else
+		devc->pollfd.fd = devc->fd;
 	devc->pollfd.events = G_IO_IN;
 	devc->pollfd.revents = 0;
 
 	/* Get the default attributes */
-	beaglelogic_get_samplerate(devc);
-	beaglelogic_get_sampleunit(devc);
-	beaglelogic_get_triggerflags(devc);
-	beaglelogic_get_buffersize(devc);
-	beaglelogic_get_bufunitsize(devc);
+	devc->beaglelogic->get_samplerate(devc);
+	devc->beaglelogic->get_sampleunit(devc);
+	devc->beaglelogic->get_buffersize(devc);
+	devc->beaglelogic->get_bufunitsize(devc);
+
+	/* Set the triggerflags to default for continuous capture unless we
+	 * explicitly limit samples using SR_CONF_LIMIT_SAMPLES */
+	devc->triggerflags = BL_TRIGGERFLAGS_CONTINUOUS;
+	devc->beaglelogic->set_triggerflags(devc);
 
 	/* Map the kernel capture FIFO for reads, saves 1 level of memcpy */
-	if (beaglelogic_mmap(devc) != SR_OK) {
-		sr_err("Unable to map capture buffer");
-		beaglelogic_close(devc);
-		return SR_ERR;
+	if (devc->beaglelogic == &beaglelogic_native_ops) {
+		if (devc->beaglelogic->mmap(devc) != SR_OK) {
+			sr_err("Unable to map capture buffer");
+			devc->beaglelogic->close(devc);
+			return SR_ERR;
+		}
+	} else {
+		devc->tcp_buffer = g_malloc(TCP_BUFFER_SIZE);
 	}
 
 	return SR_OK;
@@ -163,10 +196,23 @@ static int dev_close(struct sr_dev_inst *sdi)
 	struct dev_context *devc = sdi->priv;
 
 	/* Close the memory mapping and the file */
-	beaglelogic_munmap(devc);
-	beaglelogic_close(devc);
+	if (devc->beaglelogic == &beaglelogic_native_ops)
+		devc->beaglelogic->munmap(devc);
+	devc->beaglelogic->close(devc);
 
 	return SR_OK;
+}
+
+static void clear_helper(struct dev_context *devc)
+{
+	g_free(devc->tcp_buffer);
+	g_free(devc->address);
+	g_free(devc->port);
+}
+
+static int dev_clear(const struct sr_dev_driver *di)
+{
+	return std_dev_clear_with_callback(di, (std_dev_clear_callback)clear_helper);
 }
 
 static int config_get(uint32_t key, GVariant **data,
@@ -207,7 +253,7 @@ static int config_set(uint32_t key, GVariant *data,
 	switch (key) {
 	case SR_CONF_SAMPLERATE:
 		devc->cur_samplerate = g_variant_get_uint64(data);
-		return beaglelogic_set_samplerate(devc);
+		return devc->beaglelogic->set_samplerate(devc);
 	case SR_CONF_LIMIT_SAMPLES:
 		tmp_u64 = g_variant_get_uint64(data);
 		devc->limit_samples = tmp_u64;
@@ -219,12 +265,12 @@ static int config_set(uint32_t key, GVariant *data,
 			sr_warn("Insufficient buffer space has been allocated.");
 			sr_warn("Please use \'echo <size in bytes> > "\
 				BEAGLELOGIC_SYSFS_ATTR(memalloc) \
-				"\' as root to increase the buffer size, this"\
+				"\' to increase the buffer size, this"\
 				" capture is now truncated to %d Msamples",
 				devc->buffersize /
 				(SAMPLEUNIT_TO_BYTES(devc->sampleunit) * 1000000));
 		}
-		return beaglelogic_set_triggerflags(devc);
+		return devc->beaglelogic->set_triggerflags(devc);
 	case SR_CONF_CAPTURE_RATIO:
 		devc->capture_ratio = g_variant_get_uint64(data);
 		break;
@@ -262,16 +308,27 @@ static int config_list(uint32_t key, GVariant **data,
 static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 {
 	struct dev_context *devc = sdi->priv;
+	GSList *l;
 	struct sr_trigger *trigger;
+	struct sr_channel *channel;
 
 	/* Clear capture state */
 	devc->bytes_read = 0;
 	devc->offset = 0;
 
 	/* Configure channels */
-	devc->sampleunit = g_slist_length(sdi->channels) > 8 ?
-			BL_SAMPLEUNIT_16_BITS : BL_SAMPLEUNIT_8_BITS;
-	beaglelogic_set_sampleunit(devc);
+	devc->sampleunit = BL_SAMPLEUNIT_8_BITS;
+
+	for (l = sdi->channels; l; l = l->next) {
+		channel = l->data;
+		if (channel->index >= 8 && channel->enabled)
+			devc->sampleunit = BL_SAMPLEUNIT_16_BITS;
+	}
+	devc->beaglelogic->set_sampleunit(devc);
+
+	/* If continuous sampling, set the limit_samples to max possible value */
+	if (devc->triggerflags == BL_TRIGGERFLAGS_CONTINUOUS)
+		devc->limit_samples = (uint64_t)-1;
 
 	/* Configure triggers & send header packet */
 	if ((trigger = sr_session_trigger_get(sdi->session))) {
@@ -287,9 +344,14 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 	std_session_send_df_header(sdi);
 
 	/* Trigger and add poll on file */
-	beaglelogic_start(devc);
-	sr_session_source_add_pollfd(sdi->session, &devc->pollfd,
-			BUFUNIT_TIMEOUT_MS(devc), beaglelogic_receive_data,
+	devc->beaglelogic->start(devc);
+	if (devc->beaglelogic == &beaglelogic_native_ops)
+		sr_session_source_add_pollfd(sdi->session, &devc->pollfd,
+			BUFUNIT_TIMEOUT_MS(devc), beaglelogic_native_receive_data,
+			(void *)sdi);
+	else
+		sr_session_source_add_pollfd(sdi->session, &devc->pollfd,
+			BUFUNIT_TIMEOUT_MS(devc), beaglelogic_tcp_receive_data,
 			(void *)sdi);
 
 	return SR_OK;
@@ -300,10 +362,13 @@ static int dev_acquisition_stop(struct sr_dev_inst *sdi)
 	struct dev_context *devc = sdi->priv;
 
 	/* Execute a stop on BeagleLogic */
-	beaglelogic_stop(devc);
+	devc->beaglelogic->stop(devc);
 
-	/* lseek to offset 0, flushes the cache */
-	lseek(devc->fd, 0, SEEK_SET);
+	/* Flush the cache */
+	if (devc->beaglelogic == &beaglelogic_native_ops)
+		lseek(devc->fd, 0, SEEK_SET);
+	else
+		beaglelogic_tcp_drain(devc);
 
 	/* Remove session source and send EOT packet */
 	sr_session_source_remove_pollfd(sdi->session, &devc->pollfd);
@@ -320,7 +385,7 @@ static struct sr_dev_driver beaglelogic_driver_info = {
 	.cleanup = std_cleanup,
 	.scan = scan,
 	.dev_list = std_dev_list,
-	.dev_clear = std_dev_clear,
+	.dev_clear = dev_clear,
 	.config_get = config_get,
 	.config_set = config_set,
 	.config_list = config_list,

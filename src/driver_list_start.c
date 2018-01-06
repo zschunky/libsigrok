@@ -1,7 +1,7 @@
 /*
  * This file is part of the libsigrok project.
  *
- * Copyright (C) 2014 Matthias Heidbrink <m-sigrok@heidbrink.biz>
+ * Copyright (C) 2017 Marcus Comstedt <marcus@mc.pp.se>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,21 +17,17 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef LIBSIGROK_HARDWARE_CONRAD_DIGI_35_CPU_PROTOCOL_H
-#define LIBSIGROK_HARDWARE_CONRAD_DIGI_35_CPU_PROTOCOL_H
-
-#include <stdint.h>
-#include <string.h>
+#include <config.h>
 #include <glib.h>
 #include <libsigrok/libsigrok.h>
 #include "libsigrok-internal.h"
 
-#define LOG_PREFIX "conrad-digi-35-cpu"
+/*
+ * This marks the start of the driver list. This file must be linked
+ * before any actual drivers.
+ */
 
-struct dev_context {
-	struct sr_sw_limits limits;
-};
-
-SR_PRIV int send_msg1(const struct sr_dev_inst *sdi, char cmd, int param);
-
-#endif
+SR_PRIV const struct sr_dev_driver *sr_driver_list__start[]
+	__attribute__((section (SR_DRIVER_LIST_SECTION),
+		       used, aligned(sizeof(struct sr_dev_driver *))))
+  = { NULL /* Dummy item, as zero length arrays are not allowed by C99 */ };

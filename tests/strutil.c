@@ -56,6 +56,17 @@ static void test_rational(const char *input, struct sr_rational expected)
 		    input, rational.p, rational.q);
 }
 
+static void test_voltage(uint64_t v_p, uint64_t v_q, const char *expected)
+{
+	char *s;
+
+	s = sr_voltage_string(v_p, v_q);
+	fail_unless(s != NULL);
+	fail_unless(!strcmp(s, expected),
+		    "Invalid result for '%s': %s.", expected, s);
+	g_free(s);
+}
+
 /*
  * Check various inputs for sr_samplerate_string():
  *
@@ -214,6 +225,19 @@ START_TEST(test_ghz_period)
 }
 END_TEST
 
+START_TEST(test_volt)
+{
+	test_voltage(34, 1, "34 V");
+	test_voltage(34, 2, "17 V");
+	test_voltage(1, 1, "1 V");
+	test_voltage(1, 5, "0.2 V");
+	test_voltage(200, 1000, "200 mV");
+	test_voltage(1, 72, "0.0138889 V");
+	test_voltage(1, 388, "0.00257732 V");
+	test_voltage(10, 1000, "10 mV");
+}
+END_TEST
+
 START_TEST(test_integral)
 {
 	test_rational("1", (struct sr_rational){1, 1});
@@ -231,6 +255,11 @@ START_TEST(test_fractional)
 	test_rational("12.34", (struct sr_rational){1234, 100});
 	test_rational("-12.34", (struct sr_rational){-1234, 100});
 	test_rational("10.00", (struct sr_rational){1000, 100});
+	test_rational(".1", (struct sr_rational){1, 10});
+	test_rational("+0.1", (struct sr_rational){1, 10});
+	test_rational("+.1", (struct sr_rational){1, 10});
+	test_rational("-0.1", (struct sr_rational){-1, 10});
+	test_rational("-.1", (struct sr_rational){-1, 10});
 }
 END_TEST
 
@@ -246,6 +275,11 @@ START_TEST(test_exponent)
 	test_rational("0.001e3", (struct sr_rational){1, 1});
 	test_rational("0.001e0", (struct sr_rational){1, 1000});
 	test_rational("0.001e-3", (struct sr_rational){1, 1000000});
+	test_rational("43.737E-3", (struct sr_rational){43737, 1000000});
+	test_rational("-0.1e-2", (struct sr_rational){-1, 1000});
+	test_rational("-.1e-2", (struct sr_rational){-1, 1000});
+	test_rational("-.0e-2", (struct sr_rational){0, 1000});
+	test_rational("+.0e-2", (struct sr_rational){0, 1000});
 }
 END_TEST
 
@@ -264,6 +298,7 @@ Suite *suite_strutil(void)
 	tcase_add_test(tc, test_ghz);
 	tcase_add_test(tc, test_hz_period);
 	tcase_add_test(tc, test_ghz_period);
+	tcase_add_test(tc, test_volt);
 	tcase_add_test(tc, test_integral);
 	tcase_add_test(tc, test_fractional);
 	tcase_add_test(tc, test_exponent);

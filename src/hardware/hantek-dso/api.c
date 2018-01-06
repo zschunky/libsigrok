@@ -486,8 +486,7 @@ static int config_set(uint32_t key, GVariant *data,
 		case SR_CONF_TRIGGER_SLOPE:
 			if ((idx = std_str_idx(data, ARRAY_AND_SIZE(trigger_slopes))) < 0)
 				return SR_ERR_ARG;
-			devc->triggerslope = (trigger_slopes[idx][0] == 'r')
-				? SLOPE_POSITIVE : SLOPE_NEGATIVE;
+			devc->triggerslope = idx;
 			break;
 		case SR_CONF_HORIZ_TRIGGERPOS:
 			tmp_double = g_variant_get_double(data);
@@ -613,7 +612,7 @@ static void send_chunk(struct sr_dev_inst *sdi, unsigned char *buf,
 	/* TODO: Check malloc return value. */
 	analog.data = g_try_malloc(num_samples * sizeof(float));
 
-	for (int ch = 0; ch < 2; ch++) {
+	for (int ch = 0; ch < NUM_CHANNELS; ch++) {
 		if (!devc->ch_enabled[ch])
 			continue;
 

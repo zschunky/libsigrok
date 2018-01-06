@@ -23,6 +23,7 @@
 #include <string.h>
 #include <strings.h>
 #include <errno.h>
+#include <stdbool.h>
 #include <libsigrok/libsigrok.h>
 #include "libsigrok-internal.h"
 
@@ -171,6 +172,38 @@ SR_PRIV int sr_atof(const char *str, float *ret)
 /**
  * @private
  *
+ * Convert a string representation of a numeric value to a double. The
+ * conversion is strict and will fail if the complete string does not represent
+ * a valid double. The function sets errno according to the details of the
+ * failure. This version ignores the locale.
+ *
+ * @param str The string representation to convert.
+ * @param ret Pointer to double where the result of the conversion will be stored.
+ *
+ * @retval SR_OK Conversion successful.
+ * @retval SR_ERR Failure.
+ */
+SR_PRIV int sr_atod_ascii(const char *str, double *ret)
+{
+	double tmp;
+	char *endptr = NULL;
+
+	errno = 0;
+	tmp = g_ascii_strtod(str, &endptr);
+
+	if (!endptr || *endptr || errno) {
+		if (!errno)
+			errno = EINVAL;
+		return SR_ERR;
+	}
+
+	*ret = tmp;
+	return SR_OK;
+}
+
+/**
+ * @private
+ *
  * Convert a string representation of a numeric value to a float. The
  * conversion is strict and will fail if the complete string does not represent
  * a valid float. The function sets errno according to the details of the
@@ -233,12 +266,18 @@ SR_API int sr_parse_rational(const char *str, struct sr_rational *ret)
 	int64_t denominator = 1;
 	int32_t fractional_len = 0;
 	int32_t exponent = 0;
+	bool is_negative = false;
 
 	errno = 0;
 	integral = g_ascii_strtoll(str, &endptr, 10);
 
-	if (errno)
+	if (str == endptr && (str[0] == '-' || str[0] == '+') && str[1] == '.')
+		endptr += 1;
+	else if (errno)
 		return SR_ERR;
+
+	if (integral < 0 || str[0] == '-')
+		is_negative = true;
 
 	if (*endptr == '.') {
 		const char* start = endptr + 1;
@@ -261,7 +300,7 @@ SR_API int sr_parse_rational(const char *str, struct sr_rational *ret)
 		integral *= 10;
 	exponent -= fractional_len;
 
-	if (integral >= 0)
+	if (!is_negative)
 		integral += fractional;
 	else
 		integral -= fractional;
@@ -366,42 +405,31 @@ SR_API char *sr_samplerate_string(uint64_t samplerate)
 SR_API char *sr_period_string(uint64_t v_p, uint64_t v_q)
 {
 	double freq, v;
-	char *o;
-	int prec, r;
+	int prec;
 
 	freq = 1 / ((double)v_p / v_q);
-
-	o = g_malloc0(30 + 1);
 
 	if (freq > SR_GHZ(1)) {
 		v = (double)v_p / v_q * 1000000000000.0;
 		prec = ((v - (uint64_t)v) < FLT_MIN) ? 0 : 3;
-		r = snprintf(o, 30, "%.*f ps", prec, v);
+		return g_strdup_printf("%.*f ps", prec, v);
 	} else if (freq > SR_MHZ(1)) {
 		v = (double)v_p / v_q * 1000000000.0;
 		prec = ((v - (uint64_t)v) < FLT_MIN) ? 0 : 3;
-		r = snprintf(o, 30, "%.*f ns", prec, v);
+		return g_strdup_printf("%.*f ns", prec, v);
 	} else if (freq > SR_KHZ(1)) {
 		v = (double)v_p / v_q * 1000000.0;
 		prec = ((v - (uint64_t)v) < FLT_MIN) ? 0 : 3;
-		r = snprintf(o, 30, "%.*f us", prec, v);
+		return g_strdup_printf("%.*f us", prec, v);
 	} else if (freq > 1) {
 		v = (double)v_p / v_q * 1000.0;
 		prec = ((v - (uint64_t)v) < FLT_MIN) ? 0 : 3;
-		r = snprintf(o, 30, "%.*f ms", prec, v);
+		return g_strdup_printf("%.*f ms", prec, v);
 	} else {
 		v = (double)v_p / v_q;
 		prec = ((v - (uint64_t)v) < FLT_MIN) ? 0 : 3;
-		r = snprintf(o, 30, "%.*f s", prec, v);
+		return g_strdup_printf("%.*f s", prec, v);
 	}
-
-	if (r < 0) {
-		/* Something went wrong... */
-		g_free(o);
-		return NULL;
-	}
-
-	return o;
 }
 
 /**
@@ -422,25 +450,12 @@ SR_API char *sr_period_string(uint64_t v_p, uint64_t v_q)
  */
 SR_API char *sr_voltage_string(uint64_t v_p, uint64_t v_q)
 {
-	int r;
-	char *o;
-
-	o = g_malloc0(30 + 1);
-
 	if (v_q == 1000)
-		r = snprintf(o, 30, "%" PRIu64 "mV", v_p);
+		return g_strdup_printf("%" PRIu64 " mV", v_p);
 	else if (v_q == 1)
-		r = snprintf(o, 30, "%" PRIu64 "V", v_p);
+		return g_strdup_printf("%" PRIu64 " V", v_p);
 	else
-		r = snprintf(o, 30, "%gV", (float)v_p / (float)v_q);
-
-	if (r < 0) {
-		/* Something went wrong... */
-		g_free(o);
-		return NULL;
-	}
-
-	return o;
+		return g_strdup_printf("%g V", (float)v_p / (float)v_q);
 }
 
 /**

@@ -78,12 +78,11 @@ static int sigma_write(void *buf, size_t size, struct dev_context *devc)
 	int ret;
 
 	ret = ftdi_write_data(&devc->ftdic, (unsigned char *)buf, size);
-	if (ret < 0) {
+	if (ret < 0)
 		sr_err("ftdi_write_data failed: %s",
 		       ftdi_get_error_string(&devc->ftdic));
-	} else if ((size_t) ret != size) {
+	else if ((size_t) ret != size)
 		sr_err("ftdi_write_data did not complete write.");
-	}
 
 	return ret;
 }
@@ -646,16 +645,13 @@ SR_PRIV int sigma_convert_trigger(const struct sr_dev_inst *sdi)
 				if (match->match == SR_TRIGGER_ONE) {
 					devc->trigger.simplevalue |= channelbit;
 					devc->trigger.simplemask |= channelbit;
-				}
-				else if (match->match == SR_TRIGGER_ZERO) {
+				} else if (match->match == SR_TRIGGER_ZERO) {
 					devc->trigger.simplevalue &= ~channelbit;
 					devc->trigger.simplemask |= channelbit;
-				}
-				else if (match->match == SR_TRIGGER_FALLING) {
+				} else if (match->match == SR_TRIGGER_FALLING) {
 					devc->trigger.fallingmask |= channelbit;
 					trigger_set++;
-				}
-				else if (match->match == SR_TRIGGER_RISING) {
+				} else if (match->match == SR_TRIGGER_RISING) {
 					devc->trigger.risingmask |= channelbit;
 					trigger_set++;
 				}
@@ -1021,6 +1017,7 @@ static int download_capture(struct sr_dev_inst *sdi)
 		return FALSE;
 
 	sr_info("Downloading sample data.");
+	devc->state.state = SIGMA_DOWNLOAD;
 
 	/*
 	 * Ask the hardware to stop data acquisition. Reception of the
@@ -1101,12 +1098,12 @@ static int download_capture(struct sr_dev_inst *sdi)
 
 		dl_lines_done += dl_lines_curr;
 	}
+	g_free(dram_line);
 
 	std_session_send_df_end(sdi);
 
+	devc->state.state = SIGMA_IDLE;
 	sr_dev_acquisition_stop(sdi);
-
-	g_free(dram_line);
 
 	return TRUE;
 }
@@ -1150,6 +1147,14 @@ SR_PRIV int sigma_receive_data(int fd, int revents, void *cb_data)
 	if (devc->state.state == SIGMA_IDLE)
 		return TRUE;
 
+	/*
+	 * When the application has requested to stop the acquisition,
+	 * then immediately start downloading sample data. Otherwise
+	 * keep checking configured limits which will terminate the
+	 * acquisition and initiate download.
+	 */
+	if (devc->state.state == SIGMA_STOPPING)
+		return download_capture(sdi);
 	if (devc->state.state == SIGMA_CAPTURE)
 		return sigma_capture_mode(sdi);
 

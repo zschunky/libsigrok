@@ -20,6 +20,7 @@
 
 #include <config.h>
 #include <math.h>
+#include <stdbool.h>
 #include <glib.h>
 #include <glib/gstdio.h>
 #include "protocol.h"
@@ -336,8 +337,9 @@ static uint16_t enabled_channel_mask(const struct sr_dev_inst *sdi)
 /*
  * Get the session trigger and configure the FPGA structure
  * accordingly.
+ * @return @c true if any triggers are enabled, @c false otherwise.
  */
-static void set_trigger(const struct sr_dev_inst *sdi, struct fpga_config *cfg)
+static bool set_trigger(const struct sr_dev_inst *sdi, struct fpga_config *cfg)
 {
 	struct sr_trigger *trigger;
 	struct sr_trigger_stage *stage;
@@ -354,23 +356,7 @@ static void set_trigger(const struct sr_dev_inst *sdi, struct fpga_config *cfg)
 
 	cfg->ch_en = enabled_channel_mask(sdi);
 
-	cfg->trig_mask0[0] = 0xffff;
-	cfg->trig_mask1[0] = 0xffff;
-
-	cfg->trig_value0[0] = 0;
-	cfg->trig_value1[0] = 0;
-
-	cfg->trig_edge0[0] = 0;
-	cfg->trig_edge1[0] = 0;
-
-	cfg->trig_logic0[0] = 2;
-	cfg->trig_logic1[0] = 2;
-
-	cfg->trig_count[0] = 0;
-
-	cfg->trig_glb = num_enabled_channels << 4;
-
-	for (i = 1; i < NUM_TRIGGER_STAGES; i++) {
+	for (i = 0; i < NUM_TRIGGER_STAGES; i++) {
 		cfg->trig_mask0[i] = 0xffff;
 		cfg->trig_mask1[i] = 0xffff;
 		cfg->trig_value0[i] = 0;
@@ -394,7 +380,7 @@ static void set_trigger(const struct sr_dev_inst *sdi, struct fpga_config *cfg)
 
 	if (!(trigger = sr_session_trigger_get(sdi->session))) {
 		sr_dbg("No session trigger found");
-		return;
+		return false;
 	}
 
 	for (l = trigger->stages; l; l = l->next) {
@@ -434,23 +420,22 @@ static void set_trigger(const struct sr_dev_inst *sdi, struct fpga_config *cfg)
 		}
 	}
 
-	cfg->trig_glb |= num_trigger_stages;
+	cfg->trig_glb = (num_enabled_channels << 4) | (num_trigger_stages - 1);
+
+	return num_trigger_stages != 0;
 }
 
 static int fpga_configure(const struct sr_dev_inst *sdi)
 {
-	struct dev_context *devc;
-	struct sr_usb_dev_inst *usb;
+	const struct dev_context *const devc = sdi->priv;
+	const struct sr_usb_dev_inst *const usb = sdi->conn;
 	uint8_t c[3];
 	struct fpga_config cfg;
-	uint16_t v16;
-	uint32_t v32;
+	uint16_t mode = 0;
+	uint32_t divider;
 	int transferred, len, ret;
 
 	sr_dbg("Configuring FPGA.");
-
-	usb = sdi->conn;
-	devc = sdi->priv;
 
 	WL32(&cfg.sync, DS_CFG_START);
 	WL16(&cfg.mode_header, DS_CFG_MODE);
@@ -477,26 +462,27 @@ static int fpga_configure(const struct sr_dev_inst *sdi)
 		return SR_ERR;
 	}
 
-	v16 = 0x0000;
+	if (set_trigger(sdi, &cfg))
+		mode |= DS_MODE_TRIG_EN;
 
 	if (devc->mode == DS_OP_INTERNAL_TEST)
-		v16 = DS_MODE_INT_TEST;
+		mode |= DS_MODE_INT_TEST;
 	else if (devc->mode == DS_OP_EXTERNAL_TEST)
-		v16 = DS_MODE_EXT_TEST;
+		mode |= DS_MODE_EXT_TEST;
 	else if (devc->mode == DS_OP_LOOPBACK_TEST)
-		v16 = DS_MODE_LPB_TEST;
+		mode |= DS_MODE_LPB_TEST;
 
 	if (devc->cur_samplerate == DS_MAX_LOGIC_SAMPLERATE * 2)
-		v16 |= DS_MODE_HALF_MODE;
+		mode |= DS_MODE_HALF_MODE;
 	else if (devc->cur_samplerate == DS_MAX_LOGIC_SAMPLERATE * 4)
-		v16 |= DS_MODE_QUAR_MODE;
+		mode |= DS_MODE_QUAR_MODE;
 
 	if (devc->continuous_mode)
-		v16 |= DS_MODE_STREAM_MODE;
+		mode |= DS_MODE_STREAM_MODE;
 	if (devc->external_clock) {
-		v16 |= DS_MODE_CLK_TYPE;
+		mode |= DS_MODE_CLK_TYPE;
 		if (devc->clock_edge == DS_EDGE_FALLING)
-			v16 |= DS_MODE_CLK_EDGE;
+			mode |= DS_MODE_CLK_EDGE;
 	}
 	if (devc->limit_samples > DS_MAX_LOGIC_DEPTH *
 		ceil(devc->cur_samplerate * 1.0 / DS_MAX_LOGIC_SAMPLERATE)
@@ -504,17 +490,15 @@ static int fpga_configure(const struct sr_dev_inst *sdi)
 		/* Enable RLE for long captures.
 		 * Without this, captured data present errors.
 		 */
-		v16 |= DS_MODE_RLE_MODE;
+		mode |= DS_MODE_RLE_MODE;
 	}
 
-	WL16(&cfg.mode, v16);
-	v32 = ceil(DS_MAX_LOGIC_SAMPLERATE * 1.0 / devc->cur_samplerate);
-	WL32(&cfg.divider, v32);
+	WL16(&cfg.mode, mode);
+	divider = ceil(DS_MAX_LOGIC_SAMPLERATE * 1.0 / devc->cur_samplerate);
+	WL32(&cfg.divider, divider);
 
 	/* Number of 16-sample units. */
 	WL32(&cfg.count, devc->limit_samples / 16);
-
-	set_trigger(sdi, &cfg);
 
 	len = sizeof(struct fpga_config);
 	ret = libusb_bulk_transfer(usb->devhdl, 2 | LIBUSB_ENDPOINT_OUT,
@@ -749,10 +733,12 @@ static void deinterleave_buffer(const uint8_t *src, size_t length,
 		for (int bit = 0; bit != 64; bit++) {
 			const uint64_t *word_ptr = src_ptr;
 			sample = 0;
-			for (size_t channel = 0; channel != channel_count;
+			for (unsigned int channel = 0; channel != 16;
 				channel++) {
-				if ((channel_mask & (1 << channel)) &&
-					(*word_ptr++ & (1ULL << bit)))
+				const uint16_t m = channel_mask >> channel;
+				if (!m)
+					break;
+				if ((m & 1) && ((*word_ptr++ >> bit) & 1ULL))
 					sample |= 1 << channel;
 			}
 			*dst_ptr++ = sample;

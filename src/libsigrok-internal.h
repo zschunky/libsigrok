@@ -940,6 +940,8 @@ SR_PRIV int std_serial_dev_acquisition_stop(struct sr_dev_inst *sdi);
 #endif
 SR_PRIV int std_session_send_df_header(const struct sr_dev_inst *sdi);
 SR_PRIV int std_session_send_df_end(const struct sr_dev_inst *sdi);
+SR_PRIV int std_session_send_frame_begin(const struct sr_dev_inst *sdi);
+SR_PRIV int std_session_send_frame_end(const struct sr_dev_inst *sdi);
 SR_PRIV int std_dev_clear_with_callback(const struct sr_dev_driver *driver,
 		std_dev_clear_callback clear_private);
 SR_PRIV int std_dev_clear(const struct sr_dev_driver *driver);
@@ -984,6 +986,8 @@ SR_PRIV int std_u64_tuple_idx(GVariant *data, const uint64_t a[][2], unsigned in
 SR_PRIV int std_double_tuple_idx(GVariant *data, const double a[][2], unsigned int n);
 SR_PRIV int std_double_tuple_idx_d0(const double d, const double a[][2], unsigned int n);
 
+SR_PRIV int std_cg_idx(const struct sr_channel_group *cg, struct sr_channel_group *a[], unsigned int n);
+
 /*--- resource.c ------------------------------------------------------------*/
 
 SR_PRIV int64_t sr_file_get_size(FILE *file);
@@ -1006,6 +1010,7 @@ SR_PRIV int sr_atol(const char *str, long *ret);
 SR_PRIV int sr_atoi(const char *str, int *ret);
 SR_PRIV int sr_atod(const char *str, double *ret);
 SR_PRIV int sr_atof(const char *str, float *ret);
+SR_PRIV int sr_atod_ascii(const char *str, double *ret);
 SR_PRIV int sr_atof_ascii(const char *str, float *ret);
 
 /*--- soft-trigger.c --------------------------------------------------------*/

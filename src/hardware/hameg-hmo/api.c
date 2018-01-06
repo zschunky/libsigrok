@@ -130,7 +130,6 @@ static int dev_close(struct sr_dev_inst *sdi)
 static int check_channel_group(struct dev_context *devc,
 			     const struct sr_channel_group *cg)
 {
-	unsigned int i;
 	const struct scope_config *model;
 
 	model = devc->model_config;
@@ -138,13 +137,11 @@ static int check_channel_group(struct dev_context *devc,
 	if (!cg)
 		return CG_NONE;
 
-	for (i = 0; i < model->analog_channels; i++)
-		if (cg == devc->analog_groups[i])
-			return CG_ANALOG;
+	if (std_cg_idx(cg, devc->analog_groups, model->analog_channels) >= 0)
+		return CG_ANALOG;
 
-	for (i = 0; i < model->digital_pods; i++)
-		if (cg == devc->digital_groups[i])
-			return CG_DIGITAL;
+	if (std_cg_idx(cg, devc->digital_groups, model->digital_pods) >= 0)
+		return CG_DIGITAL;
 
 	sr_err("Invalid channel group specified.");
 
@@ -154,8 +151,7 @@ static int check_channel_group(struct dev_context *devc,
 static int config_get(uint32_t key, GVariant **data,
 	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
 {
-	int cg_type;
-	unsigned int i;
+	int cg_type, idx;
 	struct dev_context *devc;
 	const struct scope_config *model;
 	struct scope_state *state;
@@ -180,34 +176,24 @@ static int config_get(uint32_t key, GVariant **data,
 				      (*model->timebases)[state->timebase][1]);
 		break;
 	case SR_CONF_NUM_VDIV:
-		if (cg_type == CG_NONE) {
+		if (!cg)
 			return SR_ERR_CHANNEL_GROUP;
-		} else if (cg_type == CG_ANALOG) {
-			for (i = 0; i < model->analog_channels; i++) {
-				if (cg != devc->analog_groups[i])
-					continue;
-				*data = g_variant_new_int32(model->num_ydivs);
-				break;
-			}
-		} else {
+		if (cg_type != CG_ANALOG)
 			return SR_ERR_NA;
-		}
+		if (std_cg_idx(cg, devc->analog_groups, model->analog_channels) < 0)
+			return SR_ERR_ARG;
+		*data = g_variant_new_int32(model->num_ydivs);
 		break;
 	case SR_CONF_VDIV:
-		if (cg_type == CG_NONE) {
+		if (!cg)
 			return SR_ERR_CHANNEL_GROUP;
-		} else if (cg_type == CG_ANALOG) {
-			for (i = 0; i < model->analog_channels; i++) {
-				if (cg != devc->analog_groups[i])
-					continue;
-				*data = g_variant_new("(tt)",
-						      (*model->vdivs)[state->analog_channels[i].vdiv][0],
-						      (*model->vdivs)[state->analog_channels[i].vdiv][1]);
-				break;
-			}
-		} else {
+		if (cg_type != CG_ANALOG)
 			return SR_ERR_NA;
-		}
+		if ((idx = std_cg_idx(cg, devc->analog_groups, model->analog_channels)) < 0)
+			return SR_ERR_ARG;
+		*data = g_variant_new("(tt)",
+				      (*model->vdivs)[state->analog_channels[idx].vdiv][0],
+				      (*model->vdivs)[state->analog_channels[idx].vdiv][1]);
 		break;
 	case SR_CONF_TRIGGER_SOURCE:
 		*data = g_variant_new_string((*model->trigger_sources)[state->trigger_source]);
@@ -219,18 +205,13 @@ static int config_get(uint32_t key, GVariant **data,
 		*data = g_variant_new_double(state->horiz_triggerpos);
 		break;
 	case SR_CONF_COUPLING:
-		if (cg_type == CG_NONE) {
+		if (!cg)
 			return SR_ERR_CHANNEL_GROUP;
-		} else if (cg_type == CG_ANALOG) {
-			for (i = 0; i < model->analog_channels; i++) {
-				if (cg != devc->analog_groups[i])
-					continue;
-				*data = g_variant_new_string((*model->coupling_options)[state->analog_channels[i].coupling]);
-				break;
-			}
-		} else {
+		if (cg_type != CG_ANALOG)
 			return SR_ERR_NA;
-		}
+		if ((idx = std_cg_idx(cg, devc->analog_groups, model->analog_channels)) < 0)
+			return SR_ERR_ARG;
+		*data = g_variant_new_string((*model->coupling_options)[state->analog_channels[idx].coupling]);
 		break;
 	case SR_CONF_SAMPLERATE:
 		*data = g_variant_new_uint64(state->sample_rate);
@@ -245,13 +226,11 @@ static int config_get(uint32_t key, GVariant **data,
 static int config_set(uint32_t key, GVariant *data,
 	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
 {
-	int ret, cg_type, idx;
-	unsigned int i, j;
+	int ret, cg_type, idx, j;
 	char command[MAX_COMMAND_SIZE], float_str[30];
 	struct dev_context *devc;
 	const struct scope_config *model;
 	struct scope_state *state;
-	const char *tmp;
 	double tmp_d;
 	gboolean update_sample_rate;
 
@@ -275,38 +254,30 @@ static int config_set(uint32_t key, GVariant *data,
 		ret = SR_OK;
 		break;
 	case SR_CONF_TRIGGER_SOURCE:
-		tmp = g_variant_get_string(data, NULL);
-		for (i = 0; (*model->trigger_sources)[i]; i++) {
-			if (g_strcmp0(tmp, (*model->trigger_sources)[i]) != 0)
-				continue;
-			state->trigger_source = i;
-			g_snprintf(command, sizeof(command),
-				   (*model->scpi_dialect)[SCPI_CMD_SET_TRIGGER_SOURCE],
-				   (*model->trigger_sources)[i]);
-
-			ret = sr_scpi_send(sdi->conn, command);
-			break;
-		}
+		if ((idx = std_str_idx(data, *model->trigger_sources, model->num_trigger_sources)) < 0)
+			return SR_ERR_ARG;
+		state->trigger_source = idx;
+		g_snprintf(command, sizeof(command),
+			   (*model->scpi_dialect)[SCPI_CMD_SET_TRIGGER_SOURCE],
+			   (*model->trigger_sources)[idx]);
+		ret = sr_scpi_send(sdi->conn, command);
 		break;
 	case SR_CONF_VDIV:
-		if (cg_type == CG_NONE)
+		if (!cg)
 			return SR_ERR_CHANNEL_GROUP;
 		if ((idx = std_u64_tuple_idx(data, *model->vdivs, model->num_vdivs)) < 0)
 			return SR_ERR_ARG;
-		for (j = 1; j <= model->analog_channels; j++) {
-			if (cg != devc->analog_groups[j - 1])
-				continue;
-			state->analog_channels[j - 1].vdiv = idx;
-			g_ascii_formatd(float_str, sizeof(float_str), "%E",
-				(float) (*model->vdivs)[idx][0] / (*model->vdivs)[idx][1]);
-			g_snprintf(command, sizeof(command),
-				   (*model->scpi_dialect)[SCPI_CMD_SET_VERTICAL_DIV],
-				   j, float_str);
-			if (sr_scpi_send(sdi->conn, command) != SR_OK ||
-			    sr_scpi_get_opc(sdi->conn) != SR_OK)
-				return SR_ERR;
-			break;
-		}
+		if ((j = std_cg_idx(cg, devc->analog_groups, model->analog_channels)) < 0)
+			return SR_ERR_ARG;
+		state->analog_channels[j].vdiv = idx;
+		g_ascii_formatd(float_str, sizeof(float_str), "%E",
+			(float) (*model->vdivs)[idx][0] / (*model->vdivs)[idx][1]);
+		g_snprintf(command, sizeof(command),
+			   (*model->scpi_dialect)[SCPI_CMD_SET_VERTICAL_DIV],
+			   j + 1, float_str);
+		if (sr_scpi_send(sdi->conn, command) != SR_OK ||
+		    sr_scpi_get_opc(sdi->conn) != SR_OK)
+			return SR_ERR;
 		ret = SR_OK;
 		break;
 	case SR_CONF_TIMEBASE:
@@ -323,64 +294,43 @@ static int config_set(uint32_t key, GVariant *data,
 		break;
 	case SR_CONF_HORIZ_TRIGGERPOS:
 		tmp_d = g_variant_get_double(data);
-
 		if (tmp_d < 0.0 || tmp_d > 1.0)
 			return SR_ERR;
-
 		state->horiz_triggerpos = tmp_d;
 		tmp_d = -(tmp_d - 0.5) *
 			((double) (*model->timebases)[state->timebase][0] /
 			(*model->timebases)[state->timebase][1])
 			 * model->num_xdivs;
-
 		g_ascii_formatd(float_str, sizeof(float_str), "%E", tmp_d);
 		g_snprintf(command, sizeof(command),
 			   (*model->scpi_dialect)[SCPI_CMD_SET_HORIZ_TRIGGERPOS],
 			   float_str);
-
 		ret = sr_scpi_send(sdi->conn, command);
 		break;
 	case SR_CONF_TRIGGER_SLOPE:
-		tmp = g_variant_get_string(data, NULL);
-		for (i = 0; (*model->trigger_slopes)[i]; i++) {
-			if (g_strcmp0(tmp, (*model->trigger_slopes)[i]) != 0)
-				continue;
-			state->trigger_slope = i;
-			g_snprintf(command, sizeof(command),
-				   (*model->scpi_dialect)[SCPI_CMD_SET_TRIGGER_SLOPE],
-				   (*model->trigger_slopes)[i]);
-
-			ret = sr_scpi_send(sdi->conn, command);
-			break;
-		}
+		if ((idx = std_str_idx(data, *model->trigger_slopes, model->num_trigger_slopes)) < 0)
+			return SR_ERR_ARG;
+		state->trigger_slope = idx;
+		g_snprintf(command, sizeof(command),
+			   (*model->scpi_dialect)[SCPI_CMD_SET_TRIGGER_SLOPE],
+			   (*model->trigger_slopes)[idx]);
+		ret = sr_scpi_send(sdi->conn, command);
 		break;
 	case SR_CONF_COUPLING:
-		if (cg_type == CG_NONE)
+		if (!cg)
 			return SR_ERR_CHANNEL_GROUP;
-
-		tmp = g_variant_get_string(data, NULL);
-
-		for (i = 0; (*model->coupling_options)[i]; i++) {
-			if (strcmp(tmp, (*model->coupling_options)[i]) != 0)
-				continue;
-			for (j = 1; j <= model->analog_channels; j++) {
-				if (cg != devc->analog_groups[j - 1])
-					continue;
-				state->analog_channels[j-1].coupling = i;
-
-				g_snprintf(command, sizeof(command),
-					   (*model->scpi_dialect)[SCPI_CMD_SET_COUPLING],
-					   j, tmp);
-
-				if (sr_scpi_send(sdi->conn, command) != SR_OK ||
-				    sr_scpi_get_opc(sdi->conn) != SR_OK)
-					return SR_ERR;
-				break;
-			}
-
-			ret = SR_OK;
-			break;
-		}
+		if ((idx = std_str_idx(data, *model->coupling_options, model->num_coupling_options)) < 0)
+			return SR_ERR_ARG;
+		if ((j = std_cg_idx(cg, devc->analog_groups, model->analog_channels)) < 0)
+			return SR_ERR_ARG;
+		state->analog_channels[j].coupling = idx;
+		g_snprintf(command, sizeof(command),
+			   (*model->scpi_dialect)[SCPI_CMD_SET_COUPLING],
+			   j + 1, (*model->coupling_options)[idx]);
+		if (sr_scpi_send(sdi->conn, command) != SR_OK ||
+		    sr_scpi_get_opc(sdi->conn) != SR_OK)
+			return SR_ERR;
+		ret = SR_OK;
 		break;
 	default:
 		ret = SR_ERR_NA;
@@ -416,7 +366,7 @@ static int config_list(uint32_t key, GVariant **data,
 		*data = std_gvar_array_u32(ARRAY_AND_SIZE(scanopts));
 		break;
 	case SR_CONF_DEVICE_OPTIONS:
-		if (cg_type == CG_NONE) {
+		if (!cg) {
 			if (model)
 				*data = std_gvar_array_u32((const uint32_t *)model->devopts, model->num_devopts);
 			else
@@ -428,22 +378,19 @@ static int config_list(uint32_t key, GVariant **data,
 		}
 		break;
 	case SR_CONF_COUPLING:
-		if (cg_type == CG_NONE)
+		if (!cg)
 			return SR_ERR_CHANNEL_GROUP;
-		*data = g_variant_new_strv(*model->coupling_options,
-			   g_strv_length((char **)*model->coupling_options));
+		*data = g_variant_new_strv(*model->coupling_options, model->num_coupling_options);
 		break;
 	case SR_CONF_TRIGGER_SOURCE:
 		if (!model)
 			return SR_ERR_ARG;
-		*data = g_variant_new_strv(*model->trigger_sources,
-			   g_strv_length((char **)*model->trigger_sources));
+		*data = g_variant_new_strv(*model->trigger_sources, model->num_trigger_sources);
 		break;
 	case SR_CONF_TRIGGER_SLOPE:
 		if (!model)
 			return SR_ERR_ARG;
-		*data = g_variant_new_strv(*model->trigger_slopes,
-			   g_strv_length((char **)*model->trigger_slopes));
+		*data = g_variant_new_strv(*model->trigger_slopes, model->num_trigger_slopes);
 		break;
 	case SR_CONF_TIMEBASE:
 		if (!model)
@@ -451,7 +398,7 @@ static int config_list(uint32_t key, GVariant **data,
 		*data = std_gvar_tuple_array(*model->timebases, model->num_timebases);
 		break;
 	case SR_CONF_VDIV:
-		if (cg_type == CG_NONE)
+		if (!cg)
 			return SR_ERR_CHANNEL_GROUP;
 		*data = std_gvar_tuple_array(*model->vdivs, model->num_vdivs);
 		break;
@@ -609,15 +556,15 @@ static int hmo_setup_channels(const struct sr_dev_inst *sdi)
 		}
 	}
 
-	for (i = 1; i <= model->digital_pods; i++) {
-		if (state->digital_pods[i - 1] == pod_enabled[i - 1])
+	for (i = 0; i < model->digital_pods; i++) {
+		if (state->digital_pods[i] == pod_enabled[i])
 			continue;
 		g_snprintf(command, sizeof(command),
 			   (*model->scpi_dialect)[SCPI_CMD_SET_DIG_POD_STATE],
-			   i, pod_enabled[i - 1]);
+			   i + 1, pod_enabled[i]);
 		if (sr_scpi_send(scpi, command) != SR_OK)
 			return SR_ERR;
-		state->digital_pods[i - 1] = pod_enabled[i - 1];
+		state->digital_pods[i] = pod_enabled[i];
 		setup_changed = TRUE;
 	}
 

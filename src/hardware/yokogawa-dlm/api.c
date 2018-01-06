@@ -162,7 +162,6 @@ static int dev_close(struct sr_dev_inst *sdi)
 static int check_channel_group(struct dev_context *devc,
 			const struct sr_channel_group *cg)
 {
-	unsigned int i;
 	const struct scope_config *model;
 
 	model = devc->model_config;
@@ -170,23 +169,21 @@ static int check_channel_group(struct dev_context *devc,
 	if (!cg)
 		return CG_NONE;
 
-	for (i = 0; i < model->analog_channels; i++)
-		if (cg == devc->analog_groups[i])
-			return CG_ANALOG;
+	if (std_cg_idx(cg, devc->analog_groups, model->analog_channels) >= 0)
+		return CG_ANALOG;
 
-	for (i = 0; i < model->pods; i++)
-		if (cg == devc->digital_groups[i])
-			return CG_DIGITAL;
+	if (std_cg_idx(cg, devc->digital_groups, model->pods) >= 0)
+		return CG_DIGITAL;
 
 	sr_err("Invalid channel group specified.");
+
 	return CG_INVALID;
 }
 
 static int config_get(uint32_t key, GVariant **data,
 	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
 {
-	int ret, cg_type;
-	unsigned int i;
+	int ret, cg_type, idx;
 	struct dev_context *devc;
 	const struct scope_config *model;
 	struct scope_state *state;
@@ -214,32 +211,24 @@ static int config_get(uint32_t key, GVariant **data,
 		ret = SR_OK;
 		break;
 	case SR_CONF_NUM_VDIV:
-		if (cg_type == CG_NONE) {
+		if (!cg)
 			return SR_ERR_CHANNEL_GROUP;
-		} else if (cg_type == CG_ANALOG) {
-				*data = g_variant_new_int32(model->num_ydivs);
-				ret = SR_OK;
-				break;
-		} else {
-			ret = SR_ERR_NA;
-		}
+		if (cg_type != CG_ANALOG)
+			return SR_ERR_NA;
+		*data = g_variant_new_int32(model->num_ydivs);
+		ret = SR_OK;
 		break;
 	case SR_CONF_VDIV:
-		ret = SR_ERR_NA;
-		if (cg_type == CG_NONE) {
+		if (!cg)
 			return SR_ERR_CHANNEL_GROUP;
-		} else if (cg_type != CG_ANALOG)
-			break;
-
-		for (i = 0; i < model->analog_channels; i++) {
-			if (cg != devc->analog_groups[i])
-				continue;
-			*data = g_variant_new("(tt)",
-					dlm_vdivs[state->analog_states[i].vdiv][0],
-					dlm_vdivs[state->analog_states[i].vdiv][1]);
-			ret = SR_OK;
-			break;
-		}
+		if (cg_type != CG_ANALOG)
+			return SR_ERR_NA;
+		if ((idx = std_cg_idx(cg, devc->analog_groups, model->analog_channels)) < 0)
+			return SR_ERR_ARG;
+		*data = g_variant_new("(tt)",
+				dlm_vdivs[state->analog_states[idx].vdiv][0],
+				dlm_vdivs[state->analog_states[idx].vdiv][1]);
+		ret = SR_OK;
 		break;
 	case SR_CONF_TRIGGER_SOURCE:
 		*data = g_variant_new_string((*model->trigger_sources)[state->trigger_source]);
@@ -254,19 +243,14 @@ static int config_get(uint32_t key, GVariant **data,
 		ret = SR_OK;
 		break;
 	case SR_CONF_COUPLING:
-		ret = SR_ERR_NA;
-		if (cg_type == CG_NONE) {
+		if (!cg)
 			return SR_ERR_CHANNEL_GROUP;
-		} else if (cg_type != CG_ANALOG)
-			break;
-
-		for (i = 0; i < model->analog_channels; i++) {
-			if (cg != devc->analog_groups[i])
-				continue;
-			*data = g_variant_new_string((*model->coupling_options)[state->analog_states[i].coupling]);
-			ret = SR_OK;
-			break;
-		}
+		if (cg_type != CG_ANALOG)
+			return SR_ERR_NA;
+		if ((idx = std_cg_idx(cg, devc->analog_groups, model->analog_channels)) < 0)
+			return SR_ERR_ARG;
+		*data = g_variant_new_string((*model->coupling_options)[state->analog_states[idx].coupling]);
+		ret = SR_OK;
 		break;
 	case SR_CONF_SAMPLERATE:
 		*data = g_variant_new_uint64(state->sample_rate);
@@ -282,13 +266,11 @@ static int config_get(uint32_t key, GVariant **data,
 static int config_set(uint32_t key, GVariant *data,
 	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
 {
-	int ret, cg_type, idx;
-	unsigned int i, j;
+	int ret, cg_type, idx, j;
 	char float_str[30];
 	struct dev_context *devc;
 	const struct scope_config *model;
 	struct scope_state *state;
-	const char *tmp;
 	double tmp_d;
 	gboolean update_sample_rate;
 
@@ -310,32 +292,25 @@ static int config_set(uint32_t key, GVariant *data,
 		ret = SR_OK;
 		break;
 	case SR_CONF_TRIGGER_SOURCE:
-		tmp = g_variant_get_string(data, NULL);
-		for (i = 0; (*model->trigger_sources)[i]; i++) {
-			if (g_strcmp0(tmp, (*model->trigger_sources)[i]) != 0)
-				continue;
-			state->trigger_source = i;
-			/* TODO: A and B trigger support possible? */
-			ret = dlm_trigger_source_set(sdi->conn, (*model->trigger_sources)[i]);
-			break;
-		}
+		if ((idx = std_str_idx(data, *model->trigger_sources, model->num_trigger_sources)) < 0)
+			return SR_ERR_ARG;
+		state->trigger_source = idx;
+		/* TODO: A and B trigger support possible? */
+		ret = dlm_trigger_source_set(sdi->conn, (*model->trigger_sources)[idx]);
 		break;
 	case SR_CONF_VDIV:
-		if (cg_type == CG_NONE)
+		if (!cg)
 			return SR_ERR_CHANNEL_GROUP;
 		if ((idx = std_u64_tuple_idx(data, ARRAY_AND_SIZE(dlm_vdivs))) < 0)
 			return SR_ERR_ARG;
-		for (j = 1; j <= model->analog_channels; j++) {
-			if (cg != devc->analog_groups[j - 1])
-				continue;
-			state->analog_states[j - 1].vdiv = idx;
-			g_ascii_formatd(float_str, sizeof(float_str),
-					"%E", (float) dlm_vdivs[idx][0] / dlm_vdivs[idx][1]);
-			if (dlm_analog_chan_vdiv_set(sdi->conn, j, float_str) != SR_OK ||
-					sr_scpi_get_opc(sdi->conn) != SR_OK)
-				return SR_ERR;
-			break;
-		}
+		if ((j = std_cg_idx(cg, devc->analog_groups, model->analog_channels)) < 0)
+			return SR_ERR_ARG;
+		state->analog_states[j].vdiv = idx;
+		g_ascii_formatd(float_str, sizeof(float_str),
+				"%E", (float) dlm_vdivs[idx][0] / dlm_vdivs[idx][1]);
+		if (dlm_analog_chan_vdiv_set(sdi->conn, j + 1, float_str) != SR_OK ||
+				sr_scpi_get_opc(sdi->conn) != SR_OK)
+			return SR_ERR;
 		ret = SR_OK;
 		break;
 	case SR_CONF_TIMEBASE:
@@ -364,40 +339,24 @@ static int config_set(uint32_t key, GVariant *data,
 		ret = dlm_horiz_trigger_pos_set(sdi->conn, float_str);
 		break;
 	case SR_CONF_TRIGGER_SLOPE:
-		tmp = g_variant_get_string(data, NULL);
-
-		if (!tmp || !(tmp[0] == 'f' || tmp[0] == 'r'))
+		if ((idx = std_str_idx(data, ARRAY_AND_SIZE(dlm_trigger_slopes))) < 0)
 			return SR_ERR_ARG;
-
 		/* Note: See dlm_trigger_slopes[] in protocol.c. */
-		state->trigger_slope = (tmp[0] == 'r') ?
-				SLOPE_POSITIVE : SLOPE_NEGATIVE;
-
+		state->trigger_slope = idx;
 		ret = dlm_trigger_slope_set(sdi->conn, state->trigger_slope);
 		break;
 	case SR_CONF_COUPLING:
-		if (cg_type == CG_NONE)
+		if (!cg)
 			return SR_ERR_CHANNEL_GROUP;
-
-		tmp = g_variant_get_string(data, NULL);
-
-		for (i = 0; (*model->coupling_options)[i]; i++) {
-			if (strcmp(tmp, (*model->coupling_options)[i]) != 0)
-				continue;
-			for (j = 1; j <= model->analog_channels; j++) {
-				if (cg != devc->analog_groups[j - 1])
-					continue;
-				state->analog_states[j-1].coupling = i;
-
-				if (dlm_analog_chan_coupl_set(sdi->conn, j, tmp) != SR_OK ||
-						sr_scpi_get_opc(sdi->conn) != SR_OK)
-					return SR_ERR;
-				break;
-			}
-
-			ret = SR_OK;
-			break;
-		}
+		if ((idx = std_str_idx(data, *model->coupling_options, model->num_coupling_options)) < 0)
+			return SR_ERR_ARG;
+		if ((j = std_cg_idx(cg, devc->analog_groups, model->analog_channels)) < 0)
+			return SR_ERR_ARG;
+		state->analog_states[j].coupling = idx;
+		if (dlm_analog_chan_coupl_set(sdi->conn, j + 1, (*model->coupling_options)[idx]) != SR_OK ||
+				sr_scpi_get_opc(sdi->conn) != SR_OK)
+			return SR_ERR;
+		ret = SR_OK;
 		break;
 	default:
 		ret = SR_ERR_NA;
@@ -444,12 +403,10 @@ static int config_list(uint32_t key, GVariant **data,
 		case SR_CONF_TRIGGER_SOURCE:
 			if (!model)
 				return SR_ERR_ARG;
-			*data = g_variant_new_strv(*model->trigger_sources,
-					g_strv_length((char **)*model->trigger_sources));
+			*data = g_variant_new_strv(*model->trigger_sources, model->num_trigger_sources);
 			return SR_OK;
 		case SR_CONF_TRIGGER_SLOPE:
-			*data = g_variant_new_strv(dlm_trigger_slopes,
-					g_strv_length((char **)dlm_trigger_slopes));
+			*data = g_variant_new_strv(ARRAY_AND_SIZE(dlm_trigger_slopes));
 			return SR_OK;
 		case SR_CONF_NUM_HDIV:
 			*data = g_variant_new_uint32(model->num_xdivs);
@@ -472,13 +429,12 @@ static int config_list(uint32_t key, GVariant **data,
 			*data = std_gvar_array_u32(NULL, 0);
 		break;
 	case SR_CONF_COUPLING:
-		if (cg_type == CG_NONE)
+		if (!cg)
 			return SR_ERR_CHANNEL_GROUP;
-		*data = g_variant_new_strv(*model->coupling_options,
-				g_strv_length((char **)*model->coupling_options));
+		*data = g_variant_new_strv(*model->coupling_options, model->num_coupling_options);
 		break;
 	case SR_CONF_VDIV:
-		if (cg_type == CG_NONE)
+		if (!cg)
 			return SR_ERR_CHANNEL_GROUP;
 		*data = std_gvar_tuple_array(ARRAY_AND_SIZE(dlm_vdivs));
 		break;

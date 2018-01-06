@@ -67,6 +67,14 @@ static const uint32_t devopts[] = {
 	SR_CONF_CLOCK_EDGE | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
 };
 
+static const int32_t trigger_matches[] = {
+	SR_TRIGGER_ZERO,
+	SR_TRIGGER_ONE,
+	SR_TRIGGER_RISING,
+	SR_TRIGGER_FALLING,
+	SR_TRIGGER_EDGE,
+};
+
 static const char *signal_edges[] = {
 	[DS_EDGE_RISING] = "rising",
 	[DS_EDGE_FALLING] = "falling",
@@ -233,7 +241,7 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 		/* Logic channels, all in one channel group. */
 		cg = g_malloc0(sizeof(struct sr_channel_group));
 		cg->name = g_strdup("Logic");
-		for (j = 0; j < 16; j++) {
+		for (j = 0; j < NUM_CHANNELS; j++) {
 			sprintf(channel_name, "%d", j);
 			ch = sr_channel_new(sdi, j, SR_CHANNEL_LOGIC,
 						TRUE, channel_name);
@@ -352,7 +360,7 @@ static int dev_open(struct sr_dev_inst *sdi)
 	}
 
 	if (devc->cur_threshold == 0.0)
-		devc->cur_threshold = 1.5;
+		devc->cur_threshold = thresholds[1][0];
 
 	return SR_OK;
 }
@@ -513,6 +521,9 @@ static int config_list(uint32_t key, GVariant **data,
 		break;
 	case SR_CONF_SAMPLERATE:
 		*data = std_gvar_samplerates(devc->samplerates, devc->num_samplerates);
+		break;
+	case SR_CONF_TRIGGER_MATCH:
+		*data = std_gvar_array_i32(ARRAY_AND_SIZE(trigger_matches));
 		break;
 	case SR_CONF_CLOCK_EDGE:
 		*data = g_variant_new_strv(ARRAY_AND_SIZE(signal_edges));

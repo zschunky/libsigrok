@@ -80,28 +80,24 @@ static const char *coupling_options[] = {
 	"DC",  // DC with 50 Ohm termination
 	"DCL", // DC with 1 MOhm termination
 	"GND",
-	NULL,
 };
 
 static const char *scope_trigger_slopes[] = {
 	"POS",
 	"NEG",
 	"EITH",
-	NULL,
 };
 
 static const char *compact2_trigger_sources[] = {
 	"CH1", "CH2",
 	"LINE", "EXT", "PATT", "BUS1", "BUS2",
 	"D0", "D1", "D2", "D3", "D4", "D5", "D6", "D7",
-	NULL,
 };
 
 static const char *compact4_trigger_sources[] = {
 	"CH1", "CH2", "CH3", "CH4",
 	"LINE", "EXT", "PATT", "BUS1", "BUS2",
 	"D0", "D1", "D2", "D3", "D4", "D5", "D6", "D7",
-	NULL,
 };
 
 static const char *compact4_dig16_trigger_sources[] = {
@@ -109,7 +105,6 @@ static const char *compact4_dig16_trigger_sources[] = {
 	"LINE", "EXT", "PATT", "BUS1", "BUS2",
 	"D0", "D1", "D2", "D3", "D4", "D5", "D6", "D7",
 	"D8", "D9", "D10", "D11", "D12", "D13", "D14", "D15",
-	NULL,
 };
 
 static const uint64_t timebases[][2] = {
@@ -199,8 +194,13 @@ static const struct scope_config scope_models[] = {
 		.num_devopts_cg_analog = ARRAY_SIZE(devopts_cg_analog),
 
 		.coupling_options = &coupling_options,
+		.num_coupling_options = ARRAY_SIZE(coupling_options),
+
 		.trigger_sources = &compact2_trigger_sources,
+		.num_trigger_sources = ARRAY_SIZE(compact2_trigger_sources),
+
 		.trigger_slopes = &scope_trigger_slopes,
+		.num_trigger_slopes = ARRAY_SIZE(scope_trigger_slopes),
 
 		.timebases = &timebases,
 		.num_timebases = ARRAY_SIZE(timebases),
@@ -229,8 +229,13 @@ static const struct scope_config scope_models[] = {
 		.num_devopts_cg_analog = ARRAY_SIZE(devopts_cg_analog),
 
 		.coupling_options = &coupling_options,
+		.num_coupling_options = ARRAY_SIZE(coupling_options),
+
 		.trigger_sources = &compact4_trigger_sources,
+		.num_trigger_sources = ARRAY_SIZE(compact4_trigger_sources),
+
 		.trigger_slopes = &scope_trigger_slopes,
+		.num_trigger_slopes = ARRAY_SIZE(scope_trigger_slopes),
 
 		.timebases = &timebases,
 		.num_timebases = ARRAY_SIZE(timebases),
@@ -259,8 +264,13 @@ static const struct scope_config scope_models[] = {
 		.num_devopts_cg_analog = ARRAY_SIZE(devopts_cg_analog),
 
 		.coupling_options = &coupling_options,
+		.num_coupling_options = ARRAY_SIZE(coupling_options),
+
 		.trigger_sources = &compact4_dig16_trigger_sources,
+		.num_trigger_sources = ARRAY_SIZE(compact4_dig16_trigger_sources),
+
 		.trigger_slopes = &scope_trigger_slopes,
+		.num_trigger_slopes = ARRAY_SIZE(scope_trigger_slopes),
 
 		.timebases = &timebases,
 		.num_timebases = ARRAY_SIZE(timebases),
@@ -316,29 +326,24 @@ static void scope_state_dump(const struct scope_config *config,
 }
 
 static int scope_state_get_array_option(struct sr_scpi_dev_inst *scpi,
-		const char *command, const char *(*array)[], int *result)
+		const char *command, const char *(*array)[], unsigned int n, int *result)
 {
 	char *tmp;
-	unsigned int i;
+	int idx;
 
 	if (sr_scpi_get_string(scpi, command, &tmp) != SR_OK) {
 		g_free(tmp);
 		return SR_ERR;
 	}
 
-	for (i = 0; (*array)[i]; i++) {
-		if (!g_strcmp0(tmp, (*array)[i])) {
-			*result = i;
-			g_free(tmp);
-			tmp = NULL;
-			break;
-		}
+	if ((idx = std_str_idx_s(tmp, *array, n)) < 0) {
+		g_free(tmp);
+		return SR_ERR_ARG;
 	}
 
-	if (tmp) {
-		g_free(tmp);
-		return SR_ERR;
-	}
+	*result = idx;
+
+	g_free(tmp);
 
 	return SR_OK;
 }
@@ -374,13 +379,29 @@ static int array_float_get(gchar *value, const uint64_t array[][2],
 	return SR_ERR;
 }
 
-static int analog_channel_state_get(struct sr_scpi_dev_inst *scpi,
+static struct sr_channel *get_channel_by_index_and_type(GSList *channel_lhead,
+							int index, int type)
+{
+	while (channel_lhead) {
+		struct sr_channel *ch = channel_lhead->data;
+		if (ch->index == index && ch->type == type)
+			return ch;
+
+		channel_lhead = channel_lhead->next;
+	}
+
+	return 0;
+}
+
+static int analog_channel_state_get(struct sr_dev_inst *sdi,
 				    const struct scope_config *config,
 				    struct scope_state *state)
 {
 	unsigned int i, j;
 	char command[MAX_COMMAND_SIZE];
 	char *tmp_str;
+	struct sr_channel *ch;
+	struct sr_scpi_dev_inst *scpi = sdi->conn;
 
 	for (i = 0; i < config->analog_channels; i++) {
 		g_snprintf(command, sizeof(command),
@@ -390,6 +411,10 @@ static int analog_channel_state_get(struct sr_scpi_dev_inst *scpi,
 		if (sr_scpi_get_bool(scpi, command,
 				     &state->analog_channels[i].state) != SR_OK)
 			return SR_ERR;
+
+		ch = get_channel_by_index_and_type(sdi->channels, i, SR_CHANNEL_ANALOG);
+		if (ch)
+			ch->enabled = state->analog_channels[i].state;
 
 		g_snprintf(command, sizeof(command),
 			   (*config->scpi_dialect)[SCPI_CMD_GET_VERTICAL_DIV],
@@ -420,6 +445,7 @@ static int analog_channel_state_get(struct sr_scpi_dev_inst *scpi,
 			   i + 1);
 
 		if (scope_state_get_array_option(scpi, command, config->coupling_options,
+					 config->num_coupling_options,
 					 &state->analog_channels[i].coupling) != SR_OK)
 			return SR_ERR;
 
@@ -440,12 +466,14 @@ static int analog_channel_state_get(struct sr_scpi_dev_inst *scpi,
 	return SR_OK;
 }
 
-static int digital_channel_state_get(struct sr_scpi_dev_inst *scpi,
+static int digital_channel_state_get(struct sr_dev_inst *sdi,
 				     const struct scope_config *config,
 				     struct scope_state *state)
 {
 	unsigned int i;
 	char command[MAX_COMMAND_SIZE];
+	struct sr_channel *ch;
+	struct sr_scpi_dev_inst *scpi = sdi->conn;
 
 	for (i = 0; i < config->digital_channels; i++) {
 		g_snprintf(command, sizeof(command),
@@ -455,6 +483,10 @@ static int digital_channel_state_get(struct sr_scpi_dev_inst *scpi,
 		if (sr_scpi_get_bool(scpi, command,
 				     &state->digital_channels[i]) != SR_OK)
 			return SR_ERR;
+
+		ch = get_channel_by_index_and_type(sdi->channels, i, SR_CHANNEL_LOGIC);
+		if (ch)
+			ch->enabled = state->digital_channels[i];
 	}
 
 	for (i = 0; i < config->digital_pods; i++) {
@@ -475,7 +507,6 @@ SR_PRIV int hmo_update_sample_rate(const struct sr_dev_inst *sdi)
 	struct dev_context *devc;
 	struct scope_state *state;
 	const struct scope_config *config;
-
 	int tmp;
 	unsigned int i;
 	float tmp_float;
@@ -489,26 +520,26 @@ SR_PRIV int hmo_update_sample_rate(const struct sr_dev_inst *sdi)
 	channel_found = FALSE;
 
 	for (i = 0; i < config->analog_channels; i++) {
-		if (state->analog_channels[i].state) {
-			g_snprintf(chan_name, sizeof(chan_name), "CHAN%d", i + 1);
+		if (!state->analog_channels[i].state)
+			continue;
+		g_snprintf(chan_name, sizeof(chan_name), "CHAN%d", i + 1);
+		g_snprintf(tmp_str, sizeof(tmp_str),
+			   (*config->scpi_dialect)[SCPI_CMD_GET_SAMPLE_RATE_LIVE],
+			   chan_name);
+		channel_found = TRUE;
+		break;
+	}
+
+	if (!channel_found) {
+		for (i = 0; i < config->digital_pods; i++) {
+			if (!state->digital_pods[i])
+				continue;
+			g_snprintf(chan_name, sizeof(chan_name), "POD%d", i);
 			g_snprintf(tmp_str, sizeof(tmp_str),
 				   (*config->scpi_dialect)[SCPI_CMD_GET_SAMPLE_RATE_LIVE],
 				   chan_name);
 			channel_found = TRUE;
 			break;
-		}
-	}
-
-	if (!channel_found) {
-		for (i = 0; i < config->digital_pods; i++) {
-			if (state->digital_pods[i]) {
-				g_snprintf(chan_name, sizeof(chan_name), "POD%d", i);
-				g_snprintf(tmp_str, sizeof(tmp_str),
-					   (*config->scpi_dialect)[SCPI_CMD_GET_SAMPLE_RATE_LIVE],
-					   chan_name);
-				channel_found = TRUE;
-				break;
-			}
 		}
 	}
 
@@ -547,10 +578,10 @@ SR_PRIV int hmo_scope_state_get(struct sr_dev_inst *sdi)
 
 	sr_info("Fetching scope state");
 
-	if (analog_channel_state_get(sdi->conn, config, state) != SR_OK)
+	if (analog_channel_state_get(sdi, config, state) != SR_OK)
 		return SR_ERR;
 
-	if (digital_channel_state_get(sdi->conn, config, state) != SR_OK)
+	if (digital_channel_state_get(sdi, config, state) != SR_OK)
 		return SR_ERR;
 
 	if (sr_scpi_get_float(sdi->conn,
@@ -584,12 +615,14 @@ SR_PRIV int hmo_scope_state_get(struct sr_dev_inst *sdi)
 
 	if (scope_state_get_array_option(sdi->conn,
 			(*config->scpi_dialect)[SCPI_CMD_GET_TRIGGER_SOURCE],
-			config->trigger_sources, &state->trigger_source) != SR_OK)
+			config->trigger_sources, config->num_trigger_sources,
+			&state->trigger_source) != SR_OK)
 		return SR_ERR;
 
 	if (scope_state_get_array_option(sdi->conn,
-		(*config->scpi_dialect)[SCPI_CMD_GET_TRIGGER_SLOPE],
-		config->trigger_slopes, &state->trigger_slope) != SR_OK)
+			(*config->scpi_dialect)[SCPI_CMD_GET_TRIGGER_SLOPE],
+			config->trigger_slopes, config->num_trigger_slopes,
+			&state->trigger_slope) != SR_OK)
 		return SR_ERR;
 
 	if (hmo_update_sample_rate(sdi) != SR_OK)
@@ -627,7 +660,6 @@ SR_PRIV void hmo_scope_state_free(struct scope_state *state)
 
 SR_PRIV int hmo_init_device(struct sr_dev_inst *sdi)
 {
-	char tmp[25];
 	int model_index;
 	unsigned int i, j, group;
 	struct sr_channel *ch;
@@ -676,11 +708,8 @@ SR_PRIV int hmo_init_device(struct sr_dev_inst *sdi)
 
 	/* Add digital channel groups. */
 	for (i = 0; i < scope_models[model_index].digital_pods; i++) {
-		g_snprintf(tmp, 25, "POD%d", i);
-
 		devc->digital_groups[i] = g_malloc0(sizeof(struct sr_channel_group));
-
-		devc->digital_groups[i]->name = g_strdup(tmp);
+		devc->digital_groups[i]->name = g_strdup_printf("POD%d", i);
 		sdi->channel_groups = g_slist_append(sdi->channel_groups,
 				   devc->digital_groups[i]);
 	}
